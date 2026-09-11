@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pokemon Card Gallery</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14151a;
+    --panel: #1d1f27;
+    --border: #2c2f3a;
+    --text: #e8e9ee;
+    --muted: #8b8fa3;
+    --accent: #ffcb05;
+    --accent-text: #14151a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0;
+    white-space: nowrap;
+  }
+  h1 .accent { color: var(--accent); }
+  #sync-banner {
+    font-size: 0.85rem;
+    color: var(--muted);
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    display: none;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  #sync-banner.visible { display: flex; }
+  #sync-banner button {
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    padding: 0.3rem 0.7rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.8rem;
+  }
+  .filters {
+    padding: 1rem 1.5rem;
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .filters input, .filters select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.9rem;
+  }
+  #search { min-width: 220px; flex: 1 1 220px; }
+  #result-count {
+    padding: 0 1.5rem;
+    margin: 0.75rem 0 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.9rem;
+    padding: 1rem 1.5rem 3rem;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--accent); }
+  .card img {
+    width: 100%;
+    aspect-ratio: 5 / 7;
+    object-fit: contain;
+    background: #0c0d10;
+    display: block;
+  }
+  .card .meta {
+    padding: 0.5rem 0.6rem 0.65rem;
+  }
+  .card .name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .card .sub {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 0.15rem;
+  }
+  #sentinel { height: 1px; }
+  #status-line {
+    text-align: center;
+    color: var(--muted);
+    padding: 1.5rem;
+    font-size: 0.85rem;
+  }
+  #lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 2rem;
+  }
+  #lightbox.visible { display: flex; }
+  #lightbox img {
+    max-width: min(90vw, 500px);
+    max-height: 80vh;
+    border-radius: 12px;
+  }
+  #lightbox .caption {
+    position: absolute;
+    bottom: 2rem;
+    color: var(--text);
+    text-align: center;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Poke<span class="accent">mon</span> Card Gallery</h1>
+  <div id="sync-banner">
+    <span id="sync-text"></span>
+    <button id="sync-btn" type="button">Sync now</button>
+  </div>
+</header>
+
+<div class="filters">
+  <input id="search" type="search" placeholder="Search card name…">
+  <select id="filter-supertype"><option value="">All card types</option></select>
+  <select id="filter-set"><option value="">All sets</option></select>
+  <select id="filter-rarity"><option value="">All rarities</option></select>
+  <select id="filter-type"><option value="">All elemental types</option></select>
+  <select id="sort-field">
+    <option value="set">Sort: Set</option>
+    <option value="name">Sort: Name</option>
+    <option value="number">Sort: Card #</option>
+    <option value="rarity">Sort: Rarity</option>
+    <option value="hp">Sort: HP</option>
+  </select>
+  <select id="sort-order">
+    <option value="asc">Ascending</option>
+    <option value="desc">Descending</option>
+  </select>
+</div>
+
+<p id="result-count"></p>
+<div id="grid"></div>
+<div id="status-line"></div>
+<div id="sentinel"></div>
+
+<div id="lightbox">
+  <img id="lightbox-img" src="" alt="">
+  <div class="caption" id="lightbox-caption"></div>
+</div>
+
+<script>
+const state = { search: "", set: "", rarity: "", supertype: "", type: "", sort: "set", order: "asc", page: 1 };
+let pages = 1;
+let loading = false;
+let syncWasRunning = false;
+
+const grid = document.getElementById("grid");
+const statusLine = document.getElementById("status-line");
+const resultCount = document.getElementById("result-count");
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+async function loadFacets() {
+  const res = await fetch("/api/facets");
+  const data = await res.json();
+
+  const setSel = document.getElementById("filter-set");
+  setSel.innerHTML = '<option value="">All sets</option>' +
+    data.sets.map(s => `<option value="${s.id}">${s.name} (${s.card_count})</option>`).join("");
+
+  const raritySel = document.getElementById("filter-rarity");
+  raritySel.innerHTML = '<option value="">All rarities</option>' +
+    data.rarities.map(r => `<option value="${r}">${r}</option>`).join("");
+
+  const supertypeSel = document.getElementById("filter-supertype");
+  supertypeSel.innerHTML = '<option value="">All card types</option>' +
+    data.supertypes.map(s => `<option value="${s}">${s}</option>`).join("");
+
+  const typeSel = document.getElementById("filter-type");
+  typeSel.innerHTML = '<option value="">All elemental types</option>' +
+    data.types.map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+function cardEl(card) {
+  const el = document.createElement("div");
+  el.className = "card";
+  const img = card.image_filename ? `/images/${card.image_filename}` : "";
+  el.innerHTML = `
+    <img loading="lazy" src="${img}" alt="${card.name}">
+    <div class="meta">
+      <div class="name">${card.name}</div>
+      <div class="sub">${card.set_name || ""} · #${card.number || "?"}</div>
+    </div>
+  `;
+  el.addEventListener("click", () => openLightbox(card));
+  return el;
+}
+
+function openLightbox(card) {
+  const lightbox = document.getElementById("lightbox");
+  const img = document.getElementById("lightbox-img");
+  const caption = document.getElementById("lightbox-caption");
+  img.src = card.image_filename ? `/images/${card.image_filename}` : "";
+  caption.textContent = `${card.name} — ${card.set_name || ""} #${card.number || "?"} — ${card.rarity || ""}`;
+  lightbox.classList.add("visible");
+}
+
+document.getElementById("lightbox").addEventListener("click", () => {
+  document.getElementById("lightbox").classList.remove("visible");
+});
+
+async function resetAndLoad() {
+  state.page = 1;
+  grid.innerHTML = "";
+  await loadMore(true);
+}
+
+async function loadMore(replace = false) {
+  if (loading || state.page > pages) return;
+  loading = true;
+  statusLine.textContent = "Loading…";
+
+  const params = new URLSearchParams({
+    search: state.search, set: state.set, rarity: state.rarity,
+    supertype: state.supertype, type: state.type,
+    sort: state.sort, order: state.order,
+    page: state.page, page_size: 60,
+  });
+  const res = await fetch(`/api/cards?${params}`);
+  const data = await res.json();
+  pages = data.pages;
+
+  resultCount.textContent = `${data.total.toLocaleString()} card${data.total === 1 ? "" : "s"}`;
+  data.items.forEach(card => grid.appendChild(cardEl(card)));
+
+  statusLine.textContent = state.page >= pages ? (data.total ? "End of results" : "No cards match") : "";
+  state.page += 1;
+  loading = false;
+}
+
+const observer = new IntersectionObserver(entries => {
+  if (entries[0].isIntersecting) loadMore();
+}, { rootMargin: "600px" });
+observer.observe(document.getElementById("sentinel"));
+
+document.getElementById("search").addEventListener("input", debounce(e => {
+  state.search = e.target.value;
+  resetAndLoad();
+}, 300));
+
+for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
+                          ["filter-supertype", "supertype"], ["filter-type", "type"],
+                          ["sort-field", "sort"], ["sort-order", "order"]]) {
+  document.getElementById(id).addEventListener("change", e => {
+    state[key] = e.target.value;
+    resetAndLoad();
+  });
+}
+
+async function pollSyncStatus() {
+  const res = await fetch("/api/sync-status");
+  const s = await res.json();
+  const banner = document.getElementById("sync-banner");
+  const text = document.getElementById("sync-text");
+
+  if (s.running) {
+    syncWasRunning = true;
+    const setProgress = s.total_sets ? ` (set ${s.sets_done}/${s.total_sets}${s.current_set ? ": " + s.current_set : ""})` : "";
+    text.textContent = `Syncing card data…${setProgress} ${s.cards_synced.toLocaleString()} cards, ${s.images_downloaded.toLocaleString()} images downloaded`;
+    banner.classList.add("visible");
+  } else if (syncWasRunning) {
+    syncWasRunning = false;
+    text.textContent = s.last_error ? `Sync failed: ${s.last_error}` : "Sync complete";
+    banner.classList.add("visible");
+    loadFacets();
+    resetAndLoad();
+    setTimeout(() => banner.classList.remove("visible"), 6000);
+  } else if (!s.last_synced) {
+    text.textContent = "No cards cached yet.";
+    banner.classList.add("visible");
+  }
+}
+
+document.getElementById("sync-btn").addEventListener("click", async () => {
+  await fetch("/api/sync", { method: "POST" });
+  pollSyncStatus();
+});
+
+loadFacets();
+resetAndLoad();
+pollSyncStatus();
+setInterval(pollSyncStatus, 4000);
+</script>
+</body>
+</html>

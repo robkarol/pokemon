@@ -1,0 +1,5 @@
+*.env
+app/__pycache__/*
+data/
+images/
+*.pyc
