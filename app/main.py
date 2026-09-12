@@ -10,8 +10,13 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.database import get_facets, has_data, init_db, query_cards
-from app.pokemon_data import IMAGES_DIR, get_sync_status, sync_pokemon_data_async
+from app.database import (
+    get_facets, has_data, init_db, query_cards, set_collection_quantity, collection_summary,
+)
+from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
+from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
+from app.tcgdex_data import sync_tcgdex_data_async
+from app.tcgdex_data import get_sync_status as get_tcgdex_sync_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,8 +32,8 @@ app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
 async def startup_event():
     init_db()
 
-    if not has_data():
-        logger.info("No cards cached yet — triggering initial sync in background")
+    if not has_data(language="en"):
+        logger.info("No English cards cached yet — triggering initial sync in background")
         asyncio.create_task(sync_pokemon_data_async())
 
 
@@ -49,6 +54,8 @@ async def api_cards(
     rarity: str = "",
     supertype: str = "",
     type: str = "",
+    language: str = "",
+    owned: bool = False,
     sort: str = "set",
     order: str = "asc",
     page: int = 1,
@@ -60,6 +67,8 @@ async def api_cards(
         rarity=rarity,
         supertype=supertype,
         card_type=type,
+        language=language,
+        owned=owned,
         sort=sort,
         order=order,
         page=page,
@@ -74,13 +83,40 @@ async def api_facets():
 
 @app.get("/api/sync-status")
 async def api_sync_status():
-    return get_sync_status()
+    return {
+        "pokemontcg": get_pokemontcg_sync_status(),
+        "tcgdex": get_tcgdex_sync_status(),
+    }
 
 
 @app.post("/api/sync")
-async def api_sync():
-    status = get_sync_status()
+async def api_sync(source: str = "pokemontcg"):
+    if source == "tcgdex":
+        status = get_tcgdex_sync_status()
+        if status["running"]:
+            return {"started": False, "message": "sync already running"}
+        asyncio.create_task(sync_tcgdex_data_async())
+        return {"started": True}
+
+    status = get_pokemontcg_sync_status()
     if status["running"]:
         return {"started": False, "message": "sync already running"}
     asyncio.create_task(sync_pokemon_data_async())
     return {"started": True}
+
+
+@app.get("/api/collection")
+async def api_collection_summary():
+    return collection_summary()
+
+
+@app.put("/api/collection/{card_id}")
+async def api_set_collection(card_id: str, quantity: int = Query(..., ge=0, le=999)):
+    stored = set_collection_quantity(card_id, quantity)
+    return {"card_id": card_id, "quantity": stored}
+
+
+@app.delete("/api/collection/{card_id}")
+async def api_remove_collection(card_id: str):
+    set_collection_quantity(card_id, 0)
+    return {"card_id": card_id, "quantity": 0}

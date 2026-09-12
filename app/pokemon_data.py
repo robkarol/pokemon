@@ -28,7 +28,7 @@ from typing import Optional
 
 import requests
 
-from app.database import get_connection, log_sync
+from app.database import get_connection, log_sync, upsert_cards
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,10 @@ def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
     card_set = card.get("set") or {}
     number = card.get("number", "")
     hp = card.get("hp")
+    dex_numbers = card.get("nationalPokedexNumbers") or []
+    release_date = card_set.get("releaseDate")
+    if release_date:
+        release_date = release_date.replace("/", "-")
     return (
         card["id"],
         card.get("name"),
@@ -174,31 +178,15 @@ def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
         card_set.get("id"),
         card_set.get("name"),
         card_set.get("series"),
-        card_set.get("releaseDate"),
+        release_date,
         number,
         _extract_int(number),
         card.get("artist"),
+        dex_numbers[0] if dex_numbers else None,
+        "en",
         image_url,
         image_filename,
     )
-
-
-_UPSERT_SQL = """
-    INSERT INTO cards (
-        id, name, supertype, subtypes, types, hp, hp_sort, rarity,
-        set_id, set_name, series, set_release_date, number, number_sort,
-        artist, image_url, image_filename, synced_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP)
-    ON CONFLICT(id) DO UPDATE SET
-        name=excluded.name, supertype=excluded.supertype, subtypes=excluded.subtypes,
-        types=excluded.types, hp=excluded.hp, hp_sort=excluded.hp_sort,
-        rarity=excluded.rarity, set_id=excluded.set_id, set_name=excluded.set_name,
-        series=excluded.series, set_release_date=excluded.set_release_date,
-        number=excluded.number, number_sort=excluded.number_sort,
-        artist=excluded.artist, image_url=excluded.image_url,
-        image_filename=COALESCE(excluded.image_filename, cards.image_filename),
-        synced_at=CURRENT_TIMESTAMP
-"""
 
 
 def _sync_one_set(conn, pool: ThreadPoolExecutor, set_info: dict) -> int:
@@ -223,8 +211,7 @@ def _sync_one_set(conn, pool: ThreadPoolExecutor, set_info: dict) -> int:
             logger.warning(f"Image download failed for {card['id']}: {exc}")
 
     rows = [_card_to_row(card, filenames.get(card["id"])) for card in cards]
-    conn.executemany(_UPSERT_SQL, rows)
-    conn.commit()
+    upsert_cards(conn, rows)
     return len(rows)
 
 
