@@ -9,14 +9,17 @@ from typing import Optional
 
 DB_PATH = Path("/app/data/pokemon.db")
 
-# sort key -> ordered list of safe column expressions (all get the same direction)
+# sort key -> ordered list of sort terms. A plain string gets the caller's
+# chosen direction; a (expr, fixed_direction) tuple always sorts that way
+# regardless of it — used so "pokedex_number IS NULL" always pushes cards
+# with no pokedex number to the bottom, in both ascending and descending order.
 SORT_COLUMNS = {
     "name": ["name COLLATE NOCASE"],
     "set": ["set_release_date", "number_sort", "name COLLATE NOCASE"],
     "number": ["number_sort", "name COLLATE NOCASE"],
     "rarity": ["rarity COLLATE NOCASE", "name COLLATE NOCASE"],
     "hp": ["hp_sort", "name COLLATE NOCASE"],
-    "pokedex": ["pokedex_number", "name COLLATE NOCASE"],
+    "pokedex": [("pokedex_number IS NULL", "ASC"), "pokedex_number", "name COLLATE NOCASE"],
 }
 
 # Shared by every sync source (pokemontcg.io, TCGdex, ...) so the row shape
@@ -273,7 +276,11 @@ def query_cards(
 
         columns = SORT_COLUMNS.get(sort, SORT_COLUMNS["set"])
         direction = "DESC" if order == "desc" else "ASC"
-        order_clause = "ORDER BY " + ", ".join(f"{col} {direction}" for col in columns)
+        order_terms = [
+            f"{col[0]} {col[1]}" if isinstance(col, tuple) else f"{col} {direction}"
+            for col in columns
+        ]
+        order_clause = "ORDER BY " + ", ".join(order_terms)
 
         total = conn.execute(
             f"SELECT COUNT(*) AS c FROM (SELECT cards.id {joined} {where} {group_having}) sub",
