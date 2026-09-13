@@ -37,10 +37,18 @@ _UPSERT_CARD_SQL = f"""
 """
 
 
+VARIANTS = ("normal", "reverse_holo")
+
+
 def get_connection() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # WAL lets readers (e.g. the UI's /api/cards) proceed without blocking on
+    # the background sync's frequent writes, which were otherwise the main
+    # cause of slow/failed collection updates while a sync was running.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -71,9 +79,11 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS collection (
-            card_id TEXT PRIMARY KEY REFERENCES cards(id),
+            card_id TEXT NOT NULL REFERENCES cards(id),
+            variant TEXT NOT NULL DEFAULT 'normal',
             quantity INTEGER NOT NULL DEFAULT 1,
-            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (card_id, variant)
         );
 
         CREATE TABLE IF NOT EXISTS sync_log (
@@ -96,6 +106,26 @@ def init_db():
     if "language" not in cols:
         conn.execute("ALTER TABLE cards ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
     conn.commit()
+
+    # Migration: the original collection table had no `variant` column and
+    # a single-column (card_id) primary key. SQLite can't ALTER a primary
+    # key in place, so rebuild the table, mapping existing rows to 'normal'.
+    collection_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection)").fetchall()}
+    if collection_cols and "variant" not in collection_cols:
+        conn.executescript("""
+            ALTER TABLE collection RENAME TO collection_old;
+            CREATE TABLE collection (
+                card_id TEXT NOT NULL REFERENCES cards(id),
+                variant TEXT NOT NULL DEFAULT 'normal',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (card_id, variant)
+            );
+            INSERT INTO collection (card_id, variant, quantity, added_at)
+                SELECT card_id, 'normal', quantity, added_at FROM collection_old;
+            DROP TABLE collection_old;
+        """)
+        conn.commit()
 
     conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_cards_name      ON cards(name COLLATE NOCASE);
@@ -234,17 +264,21 @@ def query_cards(
         if language:
             clauses.append("cards.language = ?")
             params.append(language)
-        if owned:
-            clauses.append("collection.card_id IS NOT NULL")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         joined = "FROM cards LEFT JOIN collection ON collection.card_id = cards.id"
+        group_having = "GROUP BY cards.id" + (
+            " HAVING COALESCE(SUM(collection.quantity), 0) > 0" if owned else ""
+        )
 
         columns = SORT_COLUMNS.get(sort, SORT_COLUMNS["set"])
         direction = "DESC" if order == "desc" else "ASC"
         order_clause = "ORDER BY " + ", ".join(f"{col} {direction}" for col in columns)
 
-        total = conn.execute(f"SELECT COUNT(*) AS c {joined} {where}", params).fetchone()["c"]
+        total = conn.execute(
+            f"SELECT COUNT(*) AS c FROM (SELECT cards.id {joined} {where} {group_having}) sub",
+            params,
+        ).fetchone()["c"]
 
         page = max(page, 1)
         page_size = min(max(page_size, 1), 120)
@@ -252,8 +286,11 @@ def query_cards(
 
         rows = conn.execute(
             f"""
-            SELECT cards.*, COALESCE(collection.quantity, 0) AS owned_quantity
-            {joined} {where} {order_clause} LIMIT ? OFFSET ?
+            SELECT cards.*,
+                   COALESCE(SUM(collection.quantity), 0) AS owned_quantity,
+                   COALESCE(SUM(CASE WHEN collection.variant = 'normal' THEN collection.quantity END), 0) AS owned_normal,
+                   COALESCE(SUM(CASE WHEN collection.variant = 'reverse_holo' THEN collection.quantity END), 0) AS owned_reverse_holo
+            {joined} {where} {group_having} {order_clause} LIMIT ? OFFSET ?
             """,
             params + [page_size, offset],
         ).fetchall()
@@ -269,20 +306,22 @@ def query_cards(
         conn.close()
 
 
-def set_collection_quantity(card_id: str, quantity: int) -> int:
-    """Set (or clear, if quantity <= 0) how many copies of a card are owned. Returns the stored quantity."""
+def set_collection_quantity(card_id: str, variant: str, quantity: int) -> int:
+    """Set (or clear, if quantity <= 0) how many copies of a card/variant are owned. Returns the stored quantity."""
+    if variant not in VARIANTS:
+        raise ValueError(f"unknown variant {variant!r}")
     conn = get_connection()
     try:
         if quantity <= 0:
-            conn.execute("DELETE FROM collection WHERE card_id = ?", (card_id,))
+            conn.execute("DELETE FROM collection WHERE card_id = ? AND variant = ?", (card_id, variant))
             conn.commit()
             return 0
         conn.execute(
             """
-            INSERT INTO collection (card_id, quantity) VALUES (?, ?)
-            ON CONFLICT(card_id) DO UPDATE SET quantity = excluded.quantity
+            INSERT INTO collection (card_id, variant, quantity) VALUES (?, ?, ?)
+            ON CONFLICT(card_id, variant) DO UPDATE SET quantity = excluded.quantity
             """,
-            (card_id, quantity),
+            (card_id, variant, quantity),
         )
         conn.commit()
         return quantity
@@ -294,7 +333,7 @@ def collection_summary() -> dict:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT COUNT(*) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies FROM collection"
+            "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies FROM collection"
         ).fetchone()
         return dict(row)
     finally:

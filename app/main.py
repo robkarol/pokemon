@@ -48,7 +48,7 @@ async def cards_page(request: Request):
 
 
 @app.get("/api/cards")
-async def api_cards(
+def api_cards(
     search: str = "",
     set_id: str = Query("", alias="set"),
     rarity: str = "",
@@ -61,6 +61,9 @@ async def api_cards(
     page: int = 1,
     page_size: int = 60,
 ):
+    # Plain `def`: FastAPI runs this in its worker threadpool instead of the
+    # asyncio event loop, so a SQLite call that's briefly blocked behind the
+    # background sync's writes doesn't stall every other request too.
     return query_cards(
         search=search.strip(),
         set_id=set_id,
@@ -77,14 +80,19 @@ async def api_cards(
 
 
 @app.get("/api/facets")
-async def api_facets():
+def api_facets():
     return get_facets()
 
 
 @app.get("/api/sync-status")
-async def api_sync_status():
+def api_sync_status():
+    # has_data is checked fresh against the DB (not just the in-memory
+    # last_synced flag) so a restart doesn't make an already-populated
+    # cache look unsynced until another sync happens to run.
+    pokemontcg_status = get_pokemontcg_sync_status()
+    pokemontcg_status["has_data"] = has_data(language="en")
     return {
-        "pokemontcg": get_pokemontcg_sync_status(),
+        "pokemontcg": pokemontcg_status,
         "tcgdex": get_tcgdex_sync_status(),
     }
 
@@ -106,17 +114,21 @@ async def api_sync(source: str = "pokemontcg"):
 
 
 @app.get("/api/collection")
-async def api_collection_summary():
+def api_collection_summary():
     return collection_summary()
 
 
 @app.put("/api/collection/{card_id}")
-async def api_set_collection(card_id: str, quantity: int = Query(..., ge=0, le=999)):
-    stored = set_collection_quantity(card_id, quantity)
-    return {"card_id": card_id, "quantity": stored}
+def api_set_collection(
+    card_id: str,
+    quantity: int = Query(..., ge=0, le=999),
+    variant: str = Query("normal", pattern="^(normal|reverse_holo)$"),
+):
+    stored = set_collection_quantity(card_id, variant, quantity)
+    return {"card_id": card_id, "variant": variant, "quantity": stored}
 
 
 @app.delete("/api/collection/{card_id}")
-async def api_remove_collection(card_id: str):
-    set_collection_quantity(card_id, 0)
-    return {"card_id": card_id, "quantity": 0}
+def api_remove_collection(card_id: str, variant: str = Query("normal", pattern="^(normal|reverse_holo)$")):
+    set_collection_quantity(card_id, variant, 0)
+    return {"card_id": card_id, "variant": variant, "quantity": 0}

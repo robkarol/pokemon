@@ -133,16 +133,30 @@
   .card .meta {
     padding: 0.5rem 0.6rem 0.65rem;
   }
-  .owned-badge {
+  .badges {
     position: absolute;
     top: 0.4rem;
     left: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    align-items: flex-start;
+  }
+  .owned-badge {
     background: var(--accent);
     color: var(--accent-text);
     font-size: 0.75rem;
     font-weight: 700;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
+  }
+  .owned-badge.reverse-holo {
+    background: #a78bfa;
+    color: #1a1330;
+  }
+  .card.write-error .card-img-wrap {
+    outline: 2px solid #ef4444;
+    outline-offset: -2px;
   }
   .add-btn {
     position: absolute;
@@ -203,8 +217,12 @@
   #lightbox-img-wrap { flex: 1 1 300px; max-width: 360px; }
   #lightbox-img {
     width: 100%;
+    aspect-ratio: 5 / 7;
+    object-fit: contain;
+    background: #0c0d10;
     border-radius: 14px;
     display: block;
+    color: transparent;
   }
   #lightbox-details {
     flex: 1 1 260px;
@@ -222,20 +240,26 @@
   }
   #lightbox-collection {
     display: flex;
-    align-items: center;
-    gap: 0.75rem;
+    flex-direction: column;
+    gap: 0.5rem;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
     padding: 0.6rem 0.8rem;
     margin-bottom: 1.1rem;
   }
-  #lightbox-collection .label {
+  #lightbox-collection.write-error { outline: 2px solid #ef4444; outline-offset: -2px; }
+  .qty-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+  .qty-row .label {
     font-size: 0.85rem;
     color: var(--muted);
     margin-right: auto;
   }
-  #lightbox-collection button {
+  .qty-row button {
     width: 2rem;
     height: 2rem;
     border-radius: 50%;
@@ -248,8 +272,8 @@
     align-items: center;
     justify-content: center;
   }
-  #lightbox-collection button:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-  #qty-value {
+  .qty-row button:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .qty-row .qty-value {
     min-width: 1.6rem;
     text-align: center;
     font-weight: 700;
@@ -357,10 +381,18 @@
       <h2 id="d-name"></h2>
       <div class="set-line" id="d-set-line"></div>
       <div id="lightbox-collection">
-        <span class="label">In your collection</span>
-        <button id="qty-minus" type="button" aria-label="Remove one">−</button>
-        <span id="qty-value">0</span>
-        <button id="qty-plus" type="button" aria-label="Add one">+</button>
+        <div class="qty-row">
+          <span class="label">Normal</span>
+          <button type="button" data-variant="normal" data-delta="-1" aria-label="Remove one normal">−</button>
+          <span class="qty-value" data-variant="normal">0</span>
+          <button type="button" data-variant="normal" data-delta="1" aria-label="Add one normal">+</button>
+        </div>
+        <div class="qty-row">
+          <span class="label">Reverse Holo</span>
+          <button type="button" data-variant="reverse_holo" data-delta="-1" aria-label="Remove one reverse holo">−</button>
+          <span class="qty-value" data-variant="reverse_holo">0</span>
+          <button type="button" data-variant="reverse_holo" data-delta="1" aria-label="Add one reverse holo">+</button>
+        </div>
       </div>
       <dl id="d-meta"></dl>
     </div>
@@ -369,7 +401,7 @@
 
 <script>
 const state = {
-  search: "", set: "", rarity: "", supertype: "", type: "", language: "", owned: false,
+  search: "", set: "", rarity: "", supertype: "", type: "", language: "en", owned: false,
   sort: "set", order: "asc", page: 1,
 };
 let pages = 1;
@@ -414,24 +446,28 @@ async function loadFacets() {
   const languageSel = document.getElementById("filter-language");
   languageSel.innerHTML = '<option value="">All languages</option>' +
     data.languages.map(l => `<option value="${l}">${languageLabel(l)}</option>`).join("");
+  languageSel.value = state.language;
 }
 
 function cardEl(card, index) {
   const el = document.createElement("div");
   el.className = "card";
   const img = card.image_filename ? `/images/${card.image_filename}` : "";
-  const owned = (card.owned_quantity || 0) > 0;
   el.innerHTML = `
     <div class="card-img-wrap">
       <img loading="lazy" src="${img}" alt="${card.name}">
-      ${owned ? `<span class="owned-badge">×${card.owned_quantity}</span>` : ""}
-      <button class="add-btn" type="button" title="Add one to collection">+</button>
+      <div class="badges">
+        <span class="owned-badge normal" hidden></span>
+        <span class="owned-badge reverse-holo" hidden></span>
+      </div>
+      <button class="add-btn" type="button" title="Add one (normal) to collection">+</button>
     </div>
     <div class="meta">
       <div class="name">${card.name}</div>
       <div class="sub">${card.set_name || ""} · #${card.number || "?"}</div>
     </div>
   `;
+  updateBadges(el, card);
   el.querySelector(".add-btn").addEventListener("click", e => {
     e.stopPropagation();
     quickAdd(index);
@@ -440,33 +476,104 @@ function cardEl(card, index) {
   return el;
 }
 
-async function setQuantity(cardId, quantity) {
-  const res = await fetch(`/api/collection/${encodeURIComponent(cardId)}?quantity=${quantity}`, { method: "PUT" });
-  const data = await res.json();
-  return data.quantity;
+function updateBadges(el, card) {
+  const normalEl = el.querySelector(".owned-badge.normal");
+  const reverseEl = el.querySelector(".owned-badge.reverse-holo");
+  const normal = card.owned_normal || 0;
+  const reverse = card.owned_reverse_holo || 0;
+  normalEl.hidden = normal <= 0;
+  normalEl.textContent = `×${normal}`;
+  reverseEl.hidden = reverse <= 0;
+  reverseEl.textContent = `✦×${reverse}`;
 }
 
-function refreshCardEl(index) {
-  if (!grid.children[index]) return;
-  grid.children[index].replaceWith(cardEl(loadedCards[index], index));
+function flashWriteError(el) {
+  el.classList.add("write-error");
+  setTimeout(() => el.classList.remove("write-error"), 1500);
+}
+
+// Per (card, variant) promise chain: each write waits for the previous one
+// to settle before firing, so rapid clicks can't land out of order at the
+// server (two "set quantity to N" requests racing would otherwise let a
+// stale one overwrite a newer one). The UI itself updates instantly,
+// independent of this chain, so clicking still feels immediate.
+const writeChains = new Map();
+
+function queueQuantityWrite(cardId, variant, quantity) {
+  const key = `${cardId}:${variant}`;
+  const prev = writeChains.get(key) || Promise.resolve();
+  const next = prev.then(() => putQuantity(cardId, variant, quantity));
+  writeChains.set(key, next);
+  return next;
+}
+
+async function putQuantity(cardId, variant, quantity) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(
+      `/api/collection/${encodeURIComponent(cardId)}?quantity=${quantity}&variant=${variant}`,
+      { method: "PUT", signal: controller.signal },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function quickAdd(index) {
   const card = loadedCards[index];
-  card.owned_quantity = await setQuantity(card.id, (card.owned_quantity || 0) + 1);
-  refreshCardEl(index);
+  const field = "owned_normal";
+  const prevValue = card[field] || 0;
+  const newValue = prevValue + 1;
+
+  card[field] = newValue;
+  card.owned_quantity = (card.owned_quantity || 0) + 1;
+  const cardElNode = grid.children[index];
+  if (cardElNode) updateBadges(cardElNode, card);
+
+  const ok = await queueQuantityWrite(card.id, "normal", newValue);
+  if (!ok) {
+    card[field] = prevValue;
+    card.owned_quantity = Math.max(0, (card.owned_quantity || 0) - 1);
+    if (cardElNode) { updateBadges(cardElNode, card); flashWriteError(cardElNode); }
+  }
 }
 
-async function adjustQuantity(delta) {
+async function adjustQuantity(variant, delta) {
   if (currentIndex < 0) return;
   const card = loadedCards[currentIndex];
-  card.owned_quantity = await setQuantity(card.id, Math.max(0, (card.owned_quantity || 0) + delta));
-  document.getElementById("qty-value").textContent = card.owned_quantity;
-  refreshCardEl(currentIndex);
+  const field = variant === "reverse_holo" ? "owned_reverse_holo" : "owned_normal";
+  const prevValue = card[field] || 0;
+  const newValue = Math.max(0, prevValue + delta);
+  if (newValue === prevValue) return;
+
+  card[field] = newValue;
+  card.owned_quantity = (card.owned_quantity || 0) + (newValue - prevValue);
+  renderQtyStepper(card);
+  const cardElNode = grid.children[currentIndex];
+  if (cardElNode) updateBadges(cardElNode, card);
+
+  const ok = await queueQuantityWrite(card.id, variant, newValue);
+  if (!ok) {
+    card[field] = prevValue;
+    card.owned_quantity = (card.owned_quantity || 0) - (newValue - prevValue);
+    renderQtyStepper(card);
+    if (cardElNode) updateBadges(cardElNode, card);
+    flashWriteError(document.getElementById("lightbox-collection"));
+  }
 }
 
-document.getElementById("qty-plus").addEventListener("click", () => adjustQuantity(1));
-document.getElementById("qty-minus").addEventListener("click", () => adjustQuantity(-1));
+function renderQtyStepper(card) {
+  document.querySelector('.qty-value[data-variant="normal"]').textContent = card.owned_normal || 0;
+  document.querySelector('.qty-value[data-variant="reverse_holo"]').textContent = card.owned_reverse_holo || 0;
+}
+
+document.querySelectorAll("#lightbox-collection button[data-variant]").forEach(btn => {
+  btn.addEventListener("click", () => adjustQuantity(btn.dataset.variant, Number(btn.dataset.delta)));
+});
 
 function safeParseList(value) {
   if (!value) return [];
@@ -484,7 +591,7 @@ function renderLightbox(card) {
   document.getElementById("d-name").textContent = card.name || "";
   document.getElementById("d-set-line").textContent =
     [card.set_name, card.series].filter(Boolean).join(" · ") || "";
-  document.getElementById("qty-value").textContent = card.owned_quantity || 0;
+  renderQtyStepper(card);
 
   const types = safeParseList(card.types);
   const subtypes = safeParseList(card.subtypes);
@@ -622,7 +729,7 @@ async function pollSyncStatus() {
     pokemontcgWasRunning = false;
     lines.push(en.last_error ? `English sync failed: ${en.last_error}` : "English sync complete");
     refreshNeeded = true;
-  } else if (!en.last_synced) {
+  } else if (!en.has_data) {
     lines.push("No English cards cached yet.");
   }
 
