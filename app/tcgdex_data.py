@@ -117,18 +117,24 @@ def _card_subtypes(card: dict) -> list[str]:
     return subtypes
 
 
-_TCGDEX_VARIANT_MAP = {
-    "normal": "normal",
-    "holo": "holo",
-    "reverse": "reverse_holo",
-    "firstEdition": "first_edition",
-    "wPromo": "promo",
-}
-
-
 def _card_variants(card: dict) -> list[str]:
     flags = card.get("variants") or {}
-    return sorted(mapped for key, mapped in _TCGDEX_VARIANT_MAP.items() if flags.get(key))
+    is_first_ed = bool(flags.get("firstEdition"))
+    variants: set[str] = set()
+    # first-edition normal and first-edition holo are distinct, separately
+    # collectible prints from their non-first-edition counterparts, so fold
+    # it into the variant name itself rather than as an independent flag.
+    if flags.get("normal"):
+        variants.add("first_edition_normal" if is_first_ed else "normal")
+    if flags.get("holo"):
+        variants.add("first_edition_holo" if is_first_ed else "holo")
+    if flags.get("reverse"):
+        variants.add("reverse_holo")
+    if flags.get("wPromo"):
+        variants.add("promo")
+    if is_first_ed and not flags.get("normal") and not flags.get("holo"):
+        variants.add("first_edition")
+    return sorted(variants)
 
 
 def _process_card(lang: str, card_id: str, set_meta: dict) -> Optional[tuple]:

@@ -110,7 +110,8 @@
   .page-slot.blank .pocket-grid { visibility: hidden; }
   .binder-spine-center {
     width: 24px;
-    background: linear-gradient(90deg, #23252f, #3a3d4d, #23252f);
+    background: linear-gradient(90deg,
+      #23252f, color-mix(in srgb, var(--binder-color, #3a3d4d) 55%, #3a3d4d), #23252f);
     display: flex;
     flex-direction: column;
     justify-content: space-evenly;
@@ -203,10 +204,10 @@
     width: 4px;
     height: 48px;
     border-radius: 4px;
-    background: rgba(255,203,5,0.25);
+    background: color-mix(in srgb, var(--binder-color, var(--accent)) 25%, transparent);
     transition: background 0.15s ease;
   }
-  .flip-handle:hover::before { background: var(--accent); }
+  .flip-handle:hover::before { background: var(--binder-color, var(--accent)); }
   #forward-handle { right: -1px; }
   #backward-handle { left: -1px; }
 
@@ -420,7 +421,11 @@
 <script>
 const binderId = window.location.pathname.split("/").filter(Boolean).pop();
 const SLOTS_PER_PAGE = 9;
-const VARIANT_LABELS = { normal: "Normal", reverse_holo: "Reverse Holo" };
+const VARIANT_LABELS = {
+  normal: "Normal", holo: "Holo", reverse_holo: "Reverse Holo",
+  first_edition_normal: "1st Ed. Normal", first_edition_holo: "1st Ed. Holo",
+  first_edition: "1st Edition", promo: "Promo",
+};
 
 let binderData = null;    // { binder: {...}, slots: { "page:index": {...} } }
 let spreadIndex = 0;      // 0 = [null, 1]; k>=1 = [2k, 2k+1]
@@ -458,6 +463,7 @@ async function loadBinder() {
   binderData = await res.json();
   document.getElementById("binder-name").textContent = binderData.binder.name;
   document.title = `${binderData.binder.name} — Binder`;
+  document.getElementById("binder-frame").style.setProperty("--binder-color", binderData.binder.color);
   const maxSpread = totalSpreads(binderData.binder.page_count) - 1;
   if (spreadIndex > maxSpread) spreadIndex = maxSpread;
   renderSpread();

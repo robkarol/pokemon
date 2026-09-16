@@ -160,18 +160,22 @@ function safeParseList(value) {
   }
 }
 
-// Which collection slots a card is checkable against. We only ever track
-// two DB slots (normal, reverse_holo); a holo-only vintage print still
-// just uses the "normal" slot since there's no separate plain print of it.
+const VARIANT_LABELS = {
+  normal: "Normal", holo: "Holo", reverse_holo: "Reverse Holo",
+  first_edition_normal: "1st Ed. Normal", first_edition_holo: "1st Ed. Holo",
+  first_edition: "1st Edition", promo: "Promo",
+};
+function variantLabel(v) { return VARIANT_LABELS[v] || v; }
+
+// Every print variant actually released for this card is its own checklist
+// item — a card released as both Unlimited Holo and 1st Edition Holo, say,
+// gets two separate checkboxes, since those are two distinct collectible
+// prints, not two flags on the same one.
 function trackableSlots(card) {
   const variants = safeParseList(card.variants);
-  const hasReverse = variants.includes("reverse_holo");
-  const primaryLabel = variants.includes("normal") || variants.length === 0
-    ? "Normal"
-    : (variants.includes("holo") ? "Holo" : "Normal");
-  const slots = [{ variant: "normal", label: primaryLabel, owned: card.owned_normal || 0 }];
-  if (hasReverse) slots.push({ variant: "reverse_holo", label: "Reverse Holo", owned: card.owned_reverse_holo || 0 });
-  return slots;
+  const owned = card.owned_by_variant || {};
+  const keys = variants.length ? variants : (Object.keys(owned).length ? Object.keys(owned) : ["normal"]);
+  return keys.map(variant => ({ variant, label: variantLabel(variant), owned: owned[variant] || 0 }));
 }
 
 function updateProgress(cards) {
@@ -234,15 +238,16 @@ function rowEl(card) {
     const checkbox = label.querySelector("input");
     checkbox.addEventListener("change", async () => {
       const newQty = checkbox.checked ? 1 : 0;
-      const prevOwned = slot.variant === "normal" ? card.owned_normal : card.owned_reverse_holo;
-      if (slot.variant === "normal") card.owned_normal = newQty; else card.owned_reverse_holo = newQty;
+      const owned = card.owned_by_variant || (card.owned_by_variant = {});
+      const prevOwned = owned[slot.variant] || 0;
+      owned[slot.variant] = newQty;
       label.classList.toggle("checked", newQty > 0);
       updateProgress(cardsData);
 
       const ok = await queueQuantityWrite(card.id, slot.variant, newQty);
       if (!ok) {
         checkbox.checked = !checkbox.checked;
-        if (slot.variant === "normal") card.owned_normal = prevOwned; else card.owned_reverse_holo = prevOwned;
+        owned[slot.variant] = prevOwned;
         label.classList.toggle("checked", prevOwned > 0);
         updateProgress(cardsData);
         el.classList.add("write-error");

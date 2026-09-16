@@ -4,6 +4,7 @@ SQLite metadata cache and a flat folder of downloaded card images.
 """
 import asyncio
 import logging
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import RedirectResponse
@@ -14,7 +15,7 @@ from app.database import (
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
     get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
-    set_collection_quantity, collection_summary,
+    set_collection_quantity, update_binder, collection_summary, BINDER_COLORS,
 )
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
@@ -140,14 +141,14 @@ def api_collection_summary():
 def api_set_collection(
     card_id: str,
     quantity: int = Query(..., ge=0, le=999),
-    variant: str = Query("normal", pattern="^(normal|reverse_holo)$"),
+    variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$"),
 ):
     stored = set_collection_quantity(card_id, variant, quantity)
     return {"card_id": card_id, "variant": variant, "quantity": stored}
 
 
 @app.delete("/api/collection/{card_id}")
-def api_remove_collection(card_id: str, variant: str = Query("normal", pattern="^(normal|reverse_holo)$")):
+def api_remove_collection(card_id: str, variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$")):
     set_collection_quantity(card_id, variant, 0)
     return {"card_id": card_id, "variant": variant, "quantity": 0}
 
@@ -191,9 +192,29 @@ def api_list_binders():
     return list_binders()
 
 
+@app.get("/api/binders/colors")
+def api_binder_colors():
+    return BINDER_COLORS
+
+
 @app.post("/api/binders")
-def api_create_binder(name: str = Query(..., min_length=1, max_length=100)):
-    return create_binder(name.strip())
+def api_create_binder(
+    name: str = Query(..., min_length=1, max_length=100),
+    color: str = Query(BINDER_COLORS[0], pattern="^#[0-9a-fA-F]{6}$"),
+):
+    return create_binder(name.strip(), color)
+
+
+@app.patch("/api/binders/{binder_id}")
+def api_update_binder(
+    binder_id: int,
+    name: Optional[str] = Query(None, min_length=1, max_length=100),
+    color: Optional[str] = Query(None, pattern="^#[0-9a-fA-F]{6}$"),
+):
+    result = update_binder(binder_id, name=name.strip() if name else None, color=color)
+    if result is None:
+        raise HTTPException(status_code=404, detail="binder not found")
+    return result
 
 
 @app.get("/api/binders/{binder_id}")
@@ -226,7 +247,7 @@ def api_set_binder_slot(
     page: int,
     index: int = PathParam(..., ge=0, le=8),
     card_id: str = Query(...),
-    variant: str = Query("normal", pattern="^(normal|reverse_holo)$"),
+    variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$"),
 ):
     set_binder_slot(binder_id, page, index, card_id, variant)
     return {"ok": True}

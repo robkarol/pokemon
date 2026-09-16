@@ -44,7 +44,9 @@
   h1 .accent { color: var(--accent); }
   #new-binder-form {
     display: flex;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
     padding: 1rem 1.5rem;
     border-bottom: 1px solid var(--border);
   }
@@ -59,7 +61,7 @@
     flex: 1 1 240px;
     max-width: 400px;
   }
-  #new-binder-form button {
+  #new-binder-form button[type=submit] {
     background: var(--accent);
     color: var(--accent-text);
     border: none;
@@ -68,7 +70,22 @@
     font-weight: 600;
     cursor: pointer;
   }
-  #new-binder-form button:disabled { opacity: 0.5; cursor: default; }
+  #new-binder-form button[type=submit]:disabled { opacity: 0.5; cursor: default; }
+  .swatch-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .swatch {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
+    cursor: pointer;
+    padding: 0;
+  }
+  .swatch.selected { border-color: #fff; }
   #grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -100,13 +117,65 @@
     position: absolute;
     left: 0; top: 0; bottom: 0;
     width: 1.4rem;
-    background: linear-gradient(180deg, #454859, #23252f);
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--binder-color, #454859) 60%, #454859), #23252f);
     box-shadow: inset -3px 0 6px rgba(0,0,0,0.4);
   }
   .binder-cover:hover {
     transform: translateY(-5px) rotate(-0.5deg);
-    box-shadow: 0 16px 30px rgba(0,0,0,0.5);
+    box-shadow: 0 16px 30px rgba(0,0,0,0.5), 0 0 0 1.5px var(--binder-color, var(--accent));
   }
+  .binder-cover.editing {
+    cursor: default;
+  }
+  .binder-cover .edit-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 2.4rem;
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(20,21,26,0.75);
+    color: var(--muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2;
+  }
+  .binder-cover .edit-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .binder-cover .edit-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .binder-cover .edit-panel input[type=text] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.3rem 0.4rem;
+    font-size: 0.85rem;
+    width: 100%;
+  }
+  .binder-cover .edit-panel .edit-actions {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .binder-cover .edit-panel button {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.3rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    background: var(--panel);
+    color: var(--text);
+  }
+  .binder-cover .edit-panel button.save { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   .binder-rings {
     position: absolute;
     left: 0.45rem;
@@ -180,6 +249,7 @@
 
 <form id="new-binder-form">
   <input id="new-binder-name" type="text" placeholder="New binder name…" maxlength="100" required>
+  <div class="swatch-row" id="new-binder-swatches"></div>
   <button type="submit">+ Create Binder</button>
 </form>
 
@@ -189,12 +259,36 @@
 <script>
 const grid = document.getElementById("grid");
 const statusLine = document.getElementById("status-line");
+let binderColors = ["#ffcb05"];
+let newBinderColor = binderColors[0];
+
+function swatchRowEl(selectedColor, onSelect) {
+  const row = document.createElement("div");
+  row.className = "swatch-row";
+  binderColors.forEach(color => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "swatch" + (color === selectedColor ? " selected" : "");
+    btn.style.background = color;
+    btn.title = color;
+    btn.addEventListener("click", e => {
+      e.preventDefault();
+      row.querySelectorAll(".swatch").forEach(s => s.classList.remove("selected"));
+      btn.classList.add("selected");
+      onSelect(color);
+    });
+    row.appendChild(btn);
+  });
+  return row;
+}
 
 function binderCoverEl(binder) {
   const a = document.createElement("a");
   a.className = "binder-cover";
   a.href = `/binder/${binder.id}`;
+  a.style.setProperty("--binder-color", binder.color);
   a.innerHTML = `
+    <button class="edit-btn" type="button" title="Edit binder">&#9998;</button>
     <button class="delete-btn" type="button" title="Delete binder">&times;</button>
     <div class="binder-rings"><span></span><span></span><span></span><span></span><span></span></div>
     <div class="label"></div>
@@ -211,7 +305,61 @@ function binderCoverEl(binder) {
     const res = await fetch(`/api/binders/${binder.id}`, { method: "DELETE" });
     if (res.ok) a.remove();
   });
+  a.querySelector(".edit-btn").addEventListener("click", e => {
+    e.preventDefault();
+    e.stopPropagation();
+    openEditPanel(a, binder);
+  });
   return a;
+}
+
+function openEditPanel(a, binder) {
+  a.classList.add("editing");
+  a.querySelectorAll(".edit-btn, .delete-btn, .label, .stats").forEach(el => el.hidden = true);
+
+  let pendingColor = binder.color;
+  const panel = document.createElement("div");
+  panel.className = "edit-panel";
+  panel.innerHTML = `
+    <input type="text" maxlength="100" value="${binder.name.replace(/"/g, "&quot;")}">
+    <div class="edit-actions">
+      <button type="button" class="cancel">Cancel</button>
+      <button type="button" class="save">Save</button>
+    </div>
+  `;
+  const nameInput = panel.querySelector("input");
+  const swatches = swatchRowEl(pendingColor, c => { pendingColor = c; });
+  panel.insertBefore(swatches, panel.querySelector(".edit-actions"));
+  a.appendChild(panel);
+  nameInput.focus();
+  nameInput.select();
+
+  function close() {
+    panel.remove();
+    a.classList.remove("editing");
+    a.querySelectorAll(".edit-btn, .delete-btn, .label, .stats").forEach(el => el.hidden = false);
+  }
+
+  panel.addEventListener("click", e => e.preventDefault());
+  panel.querySelector(".cancel").addEventListener("click", e => {
+    e.preventDefault();
+    close();
+  });
+  panel.querySelector(".save").addEventListener("click", async e => {
+    e.preventDefault();
+    const newName = nameInput.value.trim();
+    if (!newName) return;
+    const params = new URLSearchParams({ name: newName, color: pendingColor });
+    const res = await fetch(`/api/binders/${binder.id}?${params}`, { method: "PATCH" });
+    if (res.ok) {
+      const updated = await res.json();
+      binder.name = updated.name;
+      binder.color = updated.color;
+      a.style.setProperty("--binder-color", updated.color);
+      a.querySelector(".label").textContent = updated.name;
+    }
+    close();
+  });
 }
 
 async function load() {
@@ -222,15 +370,25 @@ async function load() {
   statusLine.textContent = binders.length ? "" : "No binders yet — create one above.";
 }
 
+async function loadColors() {
+  const res = await fetch("/api/binders/colors");
+  binderColors = await res.json();
+  newBinderColor = binderColors[0];
+  const row = swatchRowEl(newBinderColor, c => { newBinderColor = c; });
+  document.getElementById("new-binder-swatches").replaceWith(row);
+  row.id = "new-binder-swatches";
+}
+
 document.getElementById("new-binder-form").addEventListener("submit", async e => {
   e.preventDefault();
   const input = document.getElementById("new-binder-name");
   const name = input.value.trim();
   if (!name) return;
-  const submitBtn = e.target.querySelector("button");
+  const submitBtn = e.target.querySelector("button[type=submit]");
   submitBtn.disabled = true;
   try {
-    const res = await fetch(`/api/binders?name=${encodeURIComponent(name)}`, { method: "POST" });
+    const params = new URLSearchParams({ name, color: newBinderColor });
+    const res = await fetch(`/api/binders?${params}`, { method: "POST" });
     if (res.ok) {
       input.value = "";
       await load();
@@ -240,6 +398,7 @@ document.getElementById("new-binder-form").addEventListener("submit", async e =>
   }
 });
 
+loadColors();
 load();
 </script>
 </body>

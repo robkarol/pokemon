@@ -160,51 +160,41 @@
     align-items: flex-start;
   }
   .owned-badge {
-    background: var(--accent);
-    color: var(--accent-text);
+    background: var(--variant-color, var(--accent));
+    color: var(--variant-text, var(--accent-text));
     font-size: 0.75rem;
     font-weight: 700;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
   }
-  .owned-badge.reverse-holo {
-    background: #a78bfa;
-    color: #1a1330;
-  }
   .card.write-error .card-img-wrap {
     outline: 2px solid #ef4444;
     outline-offset: -2px;
   }
-  .variant-indicator {
-    position: absolute;
-    bottom: 0.4rem;
-    right: 0.4rem;
-    background: rgba(20,21,26,0.8);
-    border: 1px solid #a78bfa;
-    color: #a78bfa;
-    font-size: 0.68rem;
-    font-weight: 700;
-    padding: 0.05rem 0.4rem;
-    border-radius: 999px;
-  }
-  .add-btn {
+  .add-buttons {
     position: absolute;
     top: 0.4rem;
     right: 0.4rem;
-    width: 1.6rem;
-    height: 1.6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    align-items: flex-end;
+  }
+  .add-btn {
+    width: 1.5rem;
+    height: 1.5rem;
     border-radius: 50%;
-    border: 1px solid var(--border);
-    background: rgba(20,21,26,0.75);
-    color: var(--text);
-    font-size: 1rem;
+    border: 1px solid var(--variant-color, var(--border));
+    background: rgba(20,21,26,0.8);
+    color: var(--variant-color, var(--text));
+    font-size: 0.95rem;
     line-height: 1;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
   }
-  .add-btn:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .add-btn:hover { background: var(--variant-color, var(--accent)); color: var(--variant-text, var(--accent-text)); }
   .card .name {
     font-size: 0.85rem;
     font-weight: 600;
@@ -285,8 +275,9 @@
   }
   .qty-row .label {
     font-size: 0.85rem;
-    color: var(--muted);
+    color: var(--variant-color, var(--muted));
     margin-right: auto;
+    font-weight: 600;
   }
   .qty-row button {
     width: 2rem;
@@ -301,7 +292,11 @@
     align-items: center;
     justify-content: center;
   }
-  .qty-row button:hover { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .qty-row button:hover {
+    background: var(--variant-color, var(--accent));
+    color: var(--variant-text, var(--accent-text));
+    border-color: var(--variant-color, var(--accent));
+  }
   .qty-row .qty-value {
     min-width: 1.6rem;
     text-align: center;
@@ -381,7 +376,9 @@
     <option value="">Any print variant</option>
     <option value="reverse_holo">Has reverse holo</option>
     <option value="holo">Has holo</option>
-    <option value="first_edition">Has 1st edition</option>
+    <option value="first_edition_normal">Has 1st ed. normal</option>
+    <option value="first_edition_holo">Has 1st ed. holo</option>
+    <option value="promo">Has promo</option>
   </select>
   <select id="sort-field">
     <option value="set">Sort: Set</option>
@@ -417,20 +414,7 @@
     <div id="lightbox-details">
       <h2 id="d-name"></h2>
       <div class="set-line" id="d-set-line"></div>
-      <div id="lightbox-collection">
-        <div class="qty-row">
-          <span class="label">Normal</span>
-          <button type="button" data-variant="normal" data-delta="-1" aria-label="Remove one normal">−</button>
-          <span class="qty-value" data-variant="normal">0</span>
-          <button type="button" data-variant="normal" data-delta="1" aria-label="Add one normal">+</button>
-        </div>
-        <div class="qty-row">
-          <span class="label">Reverse Holo</span>
-          <button type="button" data-variant="reverse_holo" data-delta="-1" aria-label="Remove one reverse holo">−</button>
-          <span class="qty-value" data-variant="reverse_holo">0</span>
-          <button type="button" data-variant="reverse_holo" data-delta="1" aria-label="Add one reverse holo">+</button>
-        </div>
-      </div>
+      <div id="lightbox-collection"></div>
       <dl id="d-meta"></dl>
     </div>
   </div>
@@ -450,8 +434,37 @@ let currentIndex = -1;
 
 const LANGUAGE_LABELS = { en: "English", ja: "Japanese", th: "Thai" };
 const languageLabel = code => LANGUAGE_LABELS[code] || code;
-const VARIANT_LABELS = { normal: "Normal", holo: "Holo", reverse_holo: "Reverse Holo", first_edition: "1st Edition", promo: "Promo" };
+const VARIANT_LABELS = {
+  normal: "Normal", holo: "Holo", reverse_holo: "Reverse Holo",
+  first_edition_normal: "1st Ed. Normal", first_edition_holo: "1st Ed. Holo",
+  first_edition: "1st Edition", promo: "Promo",
+};
 const variantLabel = code => VARIANT_LABELS[code] || code;
+
+// One color per print variant, used for its add-button/badge/stepper so the
+// different variants of a card are visually distinguishable at a glance.
+const VARIANT_STYLE = {
+  normal:               { symbol: "",    color: "#ffcb05", text: "#14151a" },
+  holo:                 { symbol: "✵", color: "#38bdf8", text: "#07202b" },
+  reverse_holo:         { symbol: "✦", color: "#a78bfa", text: "#1a1330" },
+  first_edition_normal: { symbol: "①", color: "#22c55e", text: "#052e13" },
+  first_edition_holo:   { symbol: "①✵", color: "#ec4899", text: "#2b0716" },
+  first_edition:        { symbol: "①", color: "#2dd4bf", text: "#04211d" },
+  promo:                { symbol: "PR",  color: "#fb923c", text: "#2b1300" },
+};
+function variantStyle(v) {
+  return VARIANT_STYLE[v] || { symbol: "", color: "#8b8fa3", text: "#14151a" };
+}
+// Every trackable print variant for a card — its own `variants` list, plus
+// any variant it's already owned under (covers stale data where an owned
+// variant no longer appears in a resynced card's variants). Falls back to
+// a bare "normal" slot for cards with no variant data at all.
+function trackableVariants(card) {
+  const fromCard = safeParseList(card.variants);
+  const fromOwned = Object.keys(card.owned_by_variant || {});
+  const all = Array.from(new Set([...fromCard, ...fromOwned]));
+  return all.length ? all : ["normal"];
+}
 
 const grid = document.getElementById("grid");
 const statusLine = document.getElementById("status-line");
@@ -492,40 +505,53 @@ function cardEl(card, index) {
   const el = document.createElement("div");
   el.className = "card";
   const img = card.image_filename ? `/images/${card.image_filename}` : "";
-  const hasReverseHolo = safeParseList(card.variants).includes("reverse_holo");
   el.innerHTML = `
     <div class="card-img-wrap">
       <img loading="lazy" src="${img}" alt="${card.name}">
-      <div class="badges">
-        <span class="owned-badge normal" hidden></span>
-        <span class="owned-badge reverse-holo" hidden></span>
-      </div>
-      ${hasReverseHolo ? '<span class="variant-indicator" title="Also printed as Reverse Holo">✦ RH</span>' : ""}
-      <button class="add-btn" type="button" title="Add one (normal) to collection">+</button>
+      <div class="badges"></div>
+      <div class="add-buttons"></div>
     </div>
     <div class="meta">
       <div class="name">${card.name}</div>
       <div class="sub">${card.set_name || ""} · #${card.number || "?"}</div>
     </div>
   `;
-  updateBadges(el, card);
-  el.querySelector(".add-btn").addEventListener("click", e => {
-    e.stopPropagation();
-    quickAdd(index);
+  const addButtons = el.querySelector(".add-buttons");
+  trackableVariants(card).forEach(variant => {
+    const style = variantStyle(variant);
+    const btn = document.createElement("button");
+    btn.className = "add-btn";
+    btn.type = "button";
+    btn.title = `Add one (${variantLabel(variant)})`;
+    btn.textContent = "+";
+    btn.style.setProperty("--variant-color", style.color);
+    btn.style.setProperty("--variant-text", style.text);
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      quickAdd(index, variant);
+    });
+    addButtons.appendChild(btn);
   });
+  updateBadges(el, card);
   el.addEventListener("click", () => openLightboxAt(index));
   return el;
 }
 
 function updateBadges(el, card) {
-  const normalEl = el.querySelector(".owned-badge.normal");
-  const reverseEl = el.querySelector(".owned-badge.reverse-holo");
-  const normal = card.owned_normal || 0;
-  const reverse = card.owned_reverse_holo || 0;
-  normalEl.hidden = normal <= 0;
-  normalEl.textContent = `×${normal}`;
-  reverseEl.hidden = reverse <= 0;
-  reverseEl.textContent = `✦×${reverse}`;
+  const wrap = el.querySelector(".badges");
+  wrap.innerHTML = "";
+  const owned = card.owned_by_variant || {};
+  Object.keys(owned).sort().forEach(variant => {
+    const qty = owned[variant];
+    if (!qty) return;
+    const style = variantStyle(variant);
+    const badge = document.createElement("span");
+    badge.className = "owned-badge";
+    badge.style.setProperty("--variant-color", style.color);
+    badge.style.setProperty("--variant-text", style.text);
+    badge.textContent = `${style.symbol}×${qty}`;
+    wrap.appendChild(badge);
+  });
 }
 
 function flashWriteError(el) {
@@ -564,20 +590,20 @@ async function putQuantity(cardId, variant, quantity) {
   }
 }
 
-async function quickAdd(index) {
+async function quickAdd(index, variant) {
   const card = loadedCards[index];
-  const field = "owned_normal";
-  const prevValue = card[field] || 0;
+  const owned = card.owned_by_variant || (card.owned_by_variant = {});
+  const prevValue = owned[variant] || 0;
   const newValue = prevValue + 1;
 
-  card[field] = newValue;
+  owned[variant] = newValue;
   card.owned_quantity = (card.owned_quantity || 0) + 1;
   const cardElNode = grid.children[index];
   if (cardElNode) updateBadges(cardElNode, card);
 
-  const ok = await queueQuantityWrite(card.id, "normal", newValue);
+  const ok = await queueQuantityWrite(card.id, variant, newValue);
   if (!ok) {
-    card[field] = prevValue;
+    owned[variant] = prevValue;
     card.owned_quantity = Math.max(0, (card.owned_quantity || 0) - 1);
     if (cardElNode) { updateBadges(cardElNode, card); flashWriteError(cardElNode); }
   }
@@ -586,12 +612,12 @@ async function quickAdd(index) {
 async function adjustQuantity(variant, delta) {
   if (currentIndex < 0) return;
   const card = loadedCards[currentIndex];
-  const field = variant === "reverse_holo" ? "owned_reverse_holo" : "owned_normal";
-  const prevValue = card[field] || 0;
+  const owned = card.owned_by_variant || (card.owned_by_variant = {});
+  const prevValue = owned[variant] || 0;
   const newValue = Math.max(0, prevValue + delta);
   if (newValue === prevValue) return;
 
-  card[field] = newValue;
+  owned[variant] = newValue;
   card.owned_quantity = (card.owned_quantity || 0) + (newValue - prevValue);
   renderQtyStepper(card);
   const cardElNode = grid.children[currentIndex];
@@ -599,7 +625,7 @@ async function adjustQuantity(variant, delta) {
 
   const ok = await queueQuantityWrite(card.id, variant, newValue);
   if (!ok) {
-    card[field] = prevValue;
+    owned[variant] = prevValue;
     card.owned_quantity = (card.owned_quantity || 0) - (newValue - prevValue);
     renderQtyStepper(card);
     if (cardElNode) updateBadges(cardElNode, card);
@@ -608,13 +634,27 @@ async function adjustQuantity(variant, delta) {
 }
 
 function renderQtyStepper(card) {
-  document.querySelector('.qty-value[data-variant="normal"]').textContent = card.owned_normal || 0;
-  document.querySelector('.qty-value[data-variant="reverse_holo"]').textContent = card.owned_reverse_holo || 0;
+  const wrap = document.getElementById("lightbox-collection");
+  wrap.innerHTML = "";
+  const owned = card.owned_by_variant || {};
+  trackableVariants(card).forEach(variant => {
+    const style = variantStyle(variant);
+    const row = document.createElement("div");
+    row.className = "qty-row";
+    row.style.setProperty("--variant-color", style.color);
+    row.style.setProperty("--variant-text", style.text);
+    row.innerHTML = `
+      <span class="label">${variantLabel(variant)}</span>
+      <button type="button" aria-label="Remove one ${variantLabel(variant)}">&minus;</button>
+      <span class="qty-value">${owned[variant] || 0}</span>
+      <button type="button" aria-label="Add one ${variantLabel(variant)}">+</button>
+    `;
+    const [minusBtn, plusBtn] = row.querySelectorAll("button");
+    minusBtn.addEventListener("click", () => adjustQuantity(variant, -1));
+    plusBtn.addEventListener("click", () => adjustQuantity(variant, 1));
+    wrap.appendChild(row);
+  });
 }
-
-document.querySelectorAll("#lightbox-collection button[data-variant]").forEach(btn => {
-  btn.addEventListener("click", () => adjustQuantity(btn.dataset.variant, Number(btn.dataset.delta)));
-});
 
 function safeParseList(value) {
   if (!value) return [];

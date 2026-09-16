@@ -165,13 +165,20 @@ def _variants_from_card(card: dict) -> list[str]:
     for key in prices:
         kl = key.lower()
         if "reverse" in kl:
-            variants.add("reverse_holo")
+            base = "reverse_holo"
         elif "holo" in kl:
-            variants.add("holo")
+            base = "holo"
         else:
-            variants.add("normal")
+            base = "normal"
+        # "1st Edition Holofoil" and "Unlimited Holofoil" are two distinct,
+        # separately-collectible prints (common on vintage cards) — fold
+        # first-edition into the variant name itself rather than adding it
+        # as a second independent flag, which would otherwise make a single
+        # "1st Edition Holo" print look like two unrelated checklist items.
         if "1st" in kl or "firstedition" in kl:
-            variants.add("first_edition")
+            variants.add(f"first_edition_{base}")
+        else:
+            variants.add(base)
     return sorted(variants)
 
 

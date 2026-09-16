@@ -3,6 +3,7 @@ SQLite database for caching Pokemon TCG card metadata and tracking a
 personal collection of owned cards.
 """
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -40,7 +41,12 @@ _UPSERT_CARD_SQL = f"""
 """
 
 
-VARIANTS = ("normal", "reverse_holo")
+# Variant strings come from each card's own `variants` field (see
+# pokemon_data.py / tcgdex_data.py), not a fixed enum here, so the print
+# types a binder or the collection can track grow with the data instead of
+# being capped at "normal" and "reverse_holo". This just guards against
+# garbage input reaching the column.
+_VARIANT_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 
 
 def get_connection() -> sqlite3.Connection:
@@ -102,6 +108,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS binders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#ffcb05',
             page_count INTEGER NOT NULL DEFAULT 1,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -128,6 +135,11 @@ def init_db():
         conn.execute("ALTER TABLE cards ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
     if "variants" not in cols:
         conn.execute("ALTER TABLE cards ADD COLUMN variants TEXT")
+    conn.commit()
+
+    binder_cols = {row[1] for row in conn.execute("PRAGMA table_info(binders)").fetchall()}
+    if binder_cols and "color" not in binder_cols:
+        conn.execute("ALTER TABLE binders ADD COLUMN color TEXT NOT NULL DEFAULT '#ffcb05'")
     conn.commit()
 
     # Migration: the original collection table had no `variant` column and
@@ -302,6 +314,32 @@ def get_owned_facets() -> dict:
         conn.close()
 
 
+def _attach_owned_breakdown(conn: sqlite3.Connection, rows: list) -> list[dict]:
+    """Merge each card's per-variant owned quantity in as owned_by_variant,
+    plus owned_quantity as their sum — however many distinct variants a
+    card actually has (not capped at "normal" and "reverse_holo")."""
+    items = [dict(r) for r in rows]
+    if not items:
+        return items
+    card_ids = [item["id"] for item in items]
+    placeholders = ",".join("?" for _ in card_ids)
+    collection_rows = conn.execute(
+        f"""
+        SELECT card_id, variant, SUM(quantity) AS qty FROM collection
+        WHERE card_id IN ({placeholders}) GROUP BY card_id, variant
+        """,
+        card_ids,
+    ).fetchall()
+    by_card: dict[str, dict[str, int]] = {}
+    for r in collection_rows:
+        by_card.setdefault(r["card_id"], {})[r["variant"]] = r["qty"]
+    for item in items:
+        breakdown = by_card.get(item["id"], {})
+        item["owned_by_variant"] = breakdown
+        item["owned_quantity"] = sum(breakdown.values())
+    return items
+
+
 def query_cards(
     search: str = "",
     set_id: str = "",
@@ -368,17 +406,14 @@ def query_cards(
 
         rows = conn.execute(
             f"""
-            SELECT cards.*,
-                   COALESCE(SUM(collection.quantity), 0) AS owned_quantity,
-                   COALESCE(SUM(CASE WHEN collection.variant = 'normal' THEN collection.quantity END), 0) AS owned_normal,
-                   COALESCE(SUM(CASE WHEN collection.variant = 'reverse_holo' THEN collection.quantity END), 0) AS owned_reverse_holo
+            SELECT cards.*
             {joined} {where} {group_having} {order_clause} LIMIT ? OFFSET ?
             """,
             params + [page_size, offset],
         ).fetchall()
 
         return {
-            "items": [dict(r) for r in rows],
+            "items": _attach_owned_breakdown(conn, rows),
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -404,26 +439,22 @@ def get_master_set(set_id: str) -> Optional[dict]:
 
         rows = conn.execute(
             """
-            SELECT cards.*,
-                   COALESCE(SUM(CASE WHEN collection.variant = 'normal' THEN collection.quantity END), 0) AS owned_normal,
-                   COALESCE(SUM(CASE WHEN collection.variant = 'reverse_holo' THEN collection.quantity END), 0) AS owned_reverse_holo
-            FROM cards LEFT JOIN collection ON collection.card_id = cards.id
+            SELECT cards.* FROM cards
             WHERE cards.set_id = ?
-            GROUP BY cards.id
             ORDER BY number_sort IS NULL, number_sort, name COLLATE NOCASE
             """,
             (set_id,),
         ).fetchall()
 
-        return {"set": dict(meta), "cards": [dict(r) for r in rows]}
+        return {"set": dict(meta), "cards": _attach_owned_breakdown(conn, rows)}
     finally:
         conn.close()
 
 
 def set_collection_quantity(card_id: str, variant: str, quantity: int) -> int:
     """Set (or clear, if quantity <= 0) how many copies of a card/variant are owned. Returns the stored quantity."""
-    if variant not in VARIANTS:
-        raise ValueError(f"unknown variant {variant!r}")
+    if not _VARIANT_SLUG_RE.match(variant):
+        raise ValueError(f"invalid variant {variant!r}")
     conn = get_connection()
     try:
         if quantity <= 0:
@@ -520,11 +551,27 @@ def list_owned_cards(
 SLOTS_PER_PAGE = 9  # standard 3x3 "9-pocket" binder page
 
 
+# A curated palette rather than a free color picker — keeps every binder
+# cover looking intentional against the dark theme instead of clashing.
+BINDER_COLORS = (
+    "#ffcb05",  # yellow (site accent, default)
+    "#ef4444",  # red
+    "#fb923c",  # orange
+    "#22c55e",  # green
+    "#38bdf8",  # sky blue
+    "#6366f1",  # indigo
+    "#a78bfa",  # purple
+    "#ec4899",  # pink
+    "#94a3b8",  # slate / neutral
+)
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
 def list_binders() -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute("""
-            SELECT b.id, b.name, b.page_count, b.created_at, COUNT(bs.card_id) AS filled_count
+            SELECT b.id, b.name, b.color, b.page_count, b.created_at, COUNT(bs.card_id) AS filled_count
             FROM binders b LEFT JOIN binder_slots bs ON bs.binder_id = b.id
             GROUP BY b.id
             ORDER BY b.created_at DESC
@@ -534,12 +581,39 @@ def list_binders() -> list[dict]:
         conn.close()
 
 
-def create_binder(name: str) -> dict:
+def create_binder(name: str, color: str = BINDER_COLORS[0]) -> dict:
+    if not _HEX_COLOR_RE.match(color):
+        raise ValueError(f"invalid color {color!r}")
     conn = get_connection()
     try:
-        cursor = conn.execute("INSERT INTO binders (name) VALUES (?)", (name,))
+        cursor = conn.execute("INSERT INTO binders (name, color) VALUES (?, ?)", (name, color))
         conn.commit()
-        return {"id": cursor.lastrowid, "name": name, "page_count": 1, "filled_count": 0}
+        return {"id": cursor.lastrowid, "name": name, "color": color, "page_count": 1, "filled_count": 0}
+    finally:
+        conn.close()
+
+
+def update_binder(binder_id: int, name: Optional[str] = None, color: Optional[str] = None) -> Optional[dict]:
+    if color is not None and not _HEX_COLOR_RE.match(color):
+        raise ValueError(f"invalid color {color!r}")
+    conn = get_connection()
+    try:
+        if not conn.execute("SELECT 1 FROM binders WHERE id = ?", (binder_id,)).fetchone():
+            return None
+        if name is not None:
+            conn.execute("UPDATE binders SET name = ? WHERE id = ?", (name, binder_id))
+        if color is not None:
+            conn.execute("UPDATE binders SET color = ? WHERE id = ?", (color, binder_id))
+        conn.commit()
+        row = conn.execute(
+            """
+            SELECT b.id, b.name, b.color, b.page_count, b.created_at, COUNT(bs.card_id) AS filled_count
+            FROM binders b LEFT JOIN binder_slots bs ON bs.binder_id = b.id
+            WHERE b.id = ? GROUP BY b.id
+            """,
+            (binder_id,),
+        ).fetchone()
+        return dict(row)
     finally:
         conn.close()
 
