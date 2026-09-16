@@ -231,7 +231,8 @@
     background: #0c0d10;
     box-shadow: 0 30px 70px rgba(0,0,0,0.6);
     transition: top 0.32s cubic-bezier(.2,.7,.3,1), left 0.32s cubic-bezier(.2,.7,.3,1),
-                width 0.32s cubic-bezier(.2,.7,.3,1), height 0.32s cubic-bezier(.2,.7,.3,1);
+                width 0.32s cubic-bezier(.2,.7,.3,1), height 0.32s cubic-bezier(.2,.7,.3,1),
+                opacity 0.15s ease;
     color: transparent;
     font-size: 0;
     cursor: default;
@@ -248,6 +249,30 @@
   #card-zoom-info.visible { opacity: 1; }
   #card-zoom-info .name { font-size: 1.15rem; font-weight: 700; color: var(--text); }
   #card-zoom-info .sub { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
+  .card-zoom-nav {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(29,31,39,0.8);
+    color: var(--text);
+    font-size: 1.6rem;
+    line-height: 1;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 201;
+  }
+  #card-zoom-backdrop.visible .card-zoom-nav { display: flex; }
+  .card-zoom-nav:hover { background: var(--binder-color, var(--accent)); color: var(--accent-text); border-color: var(--binder-color, var(--accent)); }
+  .card-zoom-nav:disabled { opacity: 0.3; cursor: default; }
+  .card-zoom-nav:disabled:hover { background: rgba(29,31,39,0.8); color: var(--text); border-color: var(--border); }
+  #card-zoom-prev { left: 2vw; }
+  #card-zoom-next { right: 2vw; }
 
   /* --- persistent deck panel --- */
   .deck-panel {
@@ -455,6 +480,8 @@
 <div id="status-line"></div>
 
 <div id="card-zoom-backdrop">
+  <button id="card-zoom-prev" class="card-zoom-nav" type="button" aria-label="Previous card">&lsaquo;</button>
+  <button id="card-zoom-next" class="card-zoom-nav" type="button" aria-label="Next card">&rsaquo;</button>
   <img id="card-zoom-img" src="" alt="">
   <div id="card-zoom-info">
     <div class="name"></div>
@@ -540,7 +567,7 @@ function pocketEl(pageNum, index) {
         refreshPickerIfOpen();
       }
     });
-    el.addEventListener("click", () => openCardZoom(el.querySelector("img"), slot));
+    el.addEventListener("click", () => openCardZoom(el.querySelector("img"), pageNum, index));
   } else {
     el.className = "pocket empty" + (selectedCard ? " placeable" : "");
     el.addEventListener("click", () => {
@@ -835,69 +862,142 @@ async function placeSelectedCard(pageNum, index) {
 
 // --- pop out a filled pocket's card to a much larger view, animating from
 // its exact position/size in the binder (FLIP-style) rather than just
-// fading a centered modal in ---
-let zoomOrigin = null;
+// fading a centered modal in. Left/right cycles through every filled
+// pocket in the whole binder in slot order (wrapping around), flipping
+// the page underneath whenever the next/previous card lives elsewhere. ---
+let zoomPos = null; // { page, index } of the currently zoomed pocket, or null when closed
 
-function openCardZoom(imgEl, slot) {
-  if (!imgEl || !imgEl.getAttribute("src")) return;
-  const rect = imgEl.getBoundingClientRect();
-  zoomOrigin = rect;
+function orderedFilledSlots() {
+  return Object.keys(binderData.slots)
+    .map(key => {
+      const [page, index] = key.split(":").map(Number);
+      return { page, index };
+    })
+    .sort((a, b) => a.page - b.page || a.index - b.index);
+}
 
-  const backdrop = document.getElementById("card-zoom-backdrop");
+function spreadForPage(pageNum) {
+  return Math.floor(pageNum / 2);
+}
+
+function findPocketImg(pageNum, index) {
+  const [leftNum, rightNum] = pagesForSpread(spreadIndex);
+  const container = pageNum === leftNum ? document.getElementById("left-page-content")
+    : pageNum === rightNum ? document.getElementById("right-page-content") : null;
+  const pocket = container && container.children[index];
+  return pocket ? pocket.querySelector("img") : null;
+}
+
+function setZoomPosition(rect, animated) {
   const zoomImg = document.getElementById("card-zoom-img");
-  const info = document.getElementById("card-zoom-info");
-
-  zoomImg.src = imgEl.src;
-  zoomImg.alt = slot.name || "";
-  info.querySelector(".name").textContent = slot.name || "";
-  info.querySelector(".sub").textContent = [slot.set_name, slot.number ? `#${slot.number}` : ""].filter(Boolean).join(" · ");
-
-  zoomImg.style.transition = "none";
+  zoomImg.style.transition = animated ? "" : "none";
   zoomImg.style.top = `${rect.top}px`;
   zoomImg.style.left = `${rect.left}px`;
   zoomImg.style.width = `${rect.width}px`;
   zoomImg.style.height = `${rect.height}px`;
+  if (!animated) void zoomImg.offsetWidth; // commit before any later animated change
+}
+
+function setZoomExpanded(fromRect) {
+  const targetW = Math.min(window.innerWidth * 0.85, 480);
+  const targetH = targetW * (fromRect.height / fromRect.width);
+  setZoomPosition({
+    top: Math.max((window.innerHeight - targetH) / 2 - 20, 20),
+    left: (window.innerWidth - targetW) / 2,
+    width: targetW,
+    height: targetH,
+  }, true);
+}
+
+function setZoomContent(slot) {
+  const zoomImg = document.getElementById("card-zoom-img");
+  const info = document.getElementById("card-zoom-info");
+  zoomImg.src = slot.image_filename ? `/images/${slot.image_filename}` : "";
+  zoomImg.alt = slot.name || "";
+  info.querySelector(".name").textContent = slot.name || "";
+  info.querySelector(".sub").textContent = [slot.set_name, slot.number ? `#${slot.number}` : ""].filter(Boolean).join(" · ");
+}
+
+function updateZoomNavButtons() {
+  const multiple = orderedFilledSlots().length > 1;
+  document.getElementById("card-zoom-prev").disabled = !multiple;
+  document.getElementById("card-zoom-next").disabled = !multiple;
+}
+
+function openCardZoom(imgEl, pageNum, index) {
+  if (!imgEl || !imgEl.getAttribute("src")) return;
+  zoomPos = { page: pageNum, index };
+  const rect = imgEl.getBoundingClientRect();
+
+  setZoomContent(binderData.slots[`${pageNum}:${index}`]);
+  setZoomPosition(rect, false);
+
+  const backdrop = document.getElementById("card-zoom-backdrop");
   backdrop.classList.add("visible");
   document.body.style.overflow = "hidden";
-  void zoomImg.offsetWidth; // commit the "from" styles before animating
+  updateZoomNavButtons();
 
   requestAnimationFrame(() => {
     backdrop.classList.add("in");
-    zoomImg.style.transition = "";
-    const targetW = Math.min(window.innerWidth * 0.85, 480);
-    const targetH = targetW * (rect.height / rect.width);
-    zoomImg.style.top = `${Math.max((window.innerHeight - targetH) / 2 - 20, 20)}px`;
-    zoomImg.style.left = `${(window.innerWidth - targetW) / 2}px`;
-    zoomImg.style.width = `${targetW}px`;
-    zoomImg.style.height = `${targetH}px`;
-    info.classList.add("visible");
+    setZoomExpanded(rect);
+    document.getElementById("card-zoom-info").classList.add("visible");
   });
 }
 
 function closeCardZoom() {
-  if (!zoomOrigin) return;
-  const backdrop = document.getElementById("card-zoom-backdrop");
+  if (!zoomPos) return;
+  const imgEl = findPocketImg(zoomPos.page, zoomPos.index);
+  const rect = imgEl ? imgEl.getBoundingClientRect()
+    : { top: window.innerHeight / 2, left: window.innerWidth / 2, width: 0, height: 0 };
+  zoomPos = null;
+
+  document.getElementById("card-zoom-info").classList.remove("visible");
+  document.getElementById("card-zoom-backdrop").classList.remove("in");
+  document.body.style.overflow = "";
+  setZoomPosition(rect, true);
+
+  setTimeout(() => document.getElementById("card-zoom-backdrop").classList.remove("visible"), 320);
+}
+
+function navigateZoom(delta) {
+  if (!zoomPos) return;
+  const ordered = orderedFilledSlots();
+  if (ordered.length <= 1) return;
+  const currentIdx = ordered.findIndex(o => o.page === zoomPos.page && o.index === zoomPos.index);
+  const next = ordered[(currentIdx + delta + ordered.length) % ordered.length];
+  zoomPos = next;
+
+  // Flip the page underneath if the next card isn't on the currently
+  // visible spread — the backdrop is nearly opaque so the flip itself
+  // isn't worth animating here, it just needs to have happened by the
+  // time the zoom closes (or if the user peeks by moving the mouse).
+  const targetSpread = spreadForPage(next.page);
+  if (targetSpread !== spreadIndex) {
+    spreadIndex = targetSpread;
+    renderSpread();
+  }
+
   const zoomImg = document.getElementById("card-zoom-img");
   const info = document.getElementById("card-zoom-info");
-  const rect = zoomOrigin;
-  zoomOrigin = null;
-
-  info.classList.remove("visible");
-  backdrop.classList.remove("in");
-  document.body.style.overflow = "";
-  zoomImg.style.top = `${rect.top}px`;
-  zoomImg.style.left = `${rect.left}px`;
-  zoomImg.style.width = `${rect.width}px`;
-  zoomImg.style.height = `${rect.height}px`;
-
-  setTimeout(() => backdrop.classList.remove("visible"), 320);
+  zoomImg.style.opacity = "0";
+  info.style.opacity = "0";
+  setTimeout(() => {
+    setZoomContent(binderData.slots[`${next.page}:${next.index}`]);
+    zoomImg.style.opacity = "1";
+    info.style.opacity = "1";
+  }, 160);
 }
 
 document.getElementById("card-zoom-backdrop").addEventListener("click", closeCardZoom);
 document.getElementById("card-zoom-img").addEventListener("click", e => e.stopPropagation());
 document.getElementById("card-zoom-info").addEventListener("click", e => e.stopPropagation());
+document.getElementById("card-zoom-prev").addEventListener("click", e => { e.stopPropagation(); navigateZoom(-1); });
+document.getElementById("card-zoom-next").addEventListener("click", e => { e.stopPropagation(); navigateZoom(1); });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && zoomOrigin) closeCardZoom();
+  if (!zoomPos) return;
+  if (e.key === "Escape") closeCardZoom();
+  else if (e.key === "ArrowLeft") navigateZoom(-1);
+  else if (e.key === "ArrowRight") navigateZoom(1);
 });
 
 loadBinder();
