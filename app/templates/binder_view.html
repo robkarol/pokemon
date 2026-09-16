@@ -63,56 +63,63 @@
   .toolbar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .toolbar button:disabled { opacity: 0.4; cursor: default; }
   #page-indicator { font-weight: 600; color: var(--text); }
+  .hint { font-size: 0.78rem; color: var(--muted); }
 
   .binder-stage {
     display: flex;
     justify-content: center;
-    padding: 3rem 1.5rem;
-    perspective: 1800px;
+    padding: 3rem 1rem;
+    perspective: 2000px;
+    user-select: none;
   }
   .binder-frame {
     display: flex;
+    align-items: stretch;
     transform-style: preserve-3d;
-    transform: rotateX(4deg);
+    transform: rotateX(3deg);
   }
-  .binder-spine {
-    width: 26px;
-    background: linear-gradient(180deg, #3a3d4d, #23252f);
+  .page-slot {
+    width: min(340px, 42vw);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 1.1rem;
+    position: relative;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.45);
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+  }
+  #left-page-wrap {
     border-radius: 8px 0 0 8px;
+    border-right: none;
+    transform-origin: right center;
+  }
+  #right-page-wrap {
+    border-radius: 0 8px 8px 0;
+    border-left: none;
+    transform-origin: left center;
+  }
+  .page-slot.blank .pocket-grid { visibility: hidden; }
+  .binder-spine-center {
+    width: 22px;
+    background: linear-gradient(90deg, #23252f, #3a3d4d, #23252f);
     display: flex;
     flex-direction: column;
     justify-content: space-evenly;
     align-items: center;
-    box-shadow: inset -2px 0 6px rgba(0,0,0,0.4);
+    box-shadow: inset 0 0 8px rgba(0,0,0,0.5);
+    z-index: 3;
   }
-  .binder-spine .ring {
-    width: 12px;
-    height: 12px;
+  .binder-spine-center .ring {
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
     background: #14151a;
-    border: 1px solid #4a4d5d;
+    border: 1px solid #565a6c;
   }
-  #binder-page {
-    width: min(480px, 80vw);
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-left: none;
-    border-radius: 0 10px 10px 0;
-    padding: 1.5rem;
-    box-shadow: 18px 25px 45px rgba(0,0,0,0.5);
-    transform-origin: left center;
-  }
-  @keyframes pageFlip {
-    0%   { transform: rotateY(0deg); }
-    50%  { transform: rotateY(-100deg); opacity: 0.35; }
-    100% { transform: rotateY(0deg); opacity: 1; }
-  }
-  #binder-page.flipping { animation: pageFlip 0.5s ease; }
-
   .pocket-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 0.7rem;
+    gap: 0.6rem;
   }
   .pocket {
     aspect-ratio: 5 / 7;
@@ -129,7 +136,7 @@
     align-items: center;
     justify-content: center;
     color: var(--muted);
-    font-size: 1.6rem;
+    font-size: 1.4rem;
   }
   .pocket.empty:hover { border-color: var(--accent); color: var(--accent); }
   .pocket img {
@@ -142,15 +149,15 @@
   }
   .pocket .remove-btn {
     position: absolute;
-    top: 0.2rem;
-    right: 0.2rem;
-    width: 1.3rem;
-    height: 1.3rem;
+    top: 0.15rem;
+    right: 0.15rem;
+    width: 1.2rem;
+    height: 1.2rem;
     border-radius: 50%;
     border: 1px solid var(--border);
     background: rgba(20,21,26,0.85);
     color: var(--text);
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     line-height: 1;
     cursor: pointer;
     display: flex;
@@ -159,6 +166,30 @@
   }
   .pocket .remove-btn:hover { background: #ef4444; border-color: #ef4444; }
   .pocket.write-error { outline: 2px solid #ef4444; outline-offset: -2px; }
+
+  .flip-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 22px;
+    cursor: grab;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .flip-handle:active { cursor: grabbing; }
+  .flip-handle::before {
+    content: "";
+    width: 4px;
+    height: 42px;
+    border-radius: 4px;
+    background: rgba(255,203,5,0.25);
+    transition: background 0.15s ease;
+  }
+  .flip-handle:hover::before { background: var(--accent); }
+  #forward-handle { right: -1px; }
+  #backward-handle { left: -1px; }
 
   #status-line { text-align: center; color: var(--muted); padding: 2rem; }
 
@@ -183,6 +214,49 @@
     flex-direction: column;
     overflow: hidden;
   }
+
+  /* --- deck-reveal stage --- */
+  #picker-deck-view {
+    padding: 2.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+    cursor: pointer;
+  }
+  #picker-deck-view[hidden] { display: none; }
+  .deck-stack {
+    position: relative;
+    width: 130px;
+    height: 182px;
+  }
+  .deck-card {
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    background:
+      radial-gradient(circle at 50% 50%, transparent 0 22%, var(--accent) 22% 24%, transparent 24%),
+      repeating-linear-gradient(45deg, #20222c, #20222c 10px, #262837 10px, #262837 20px);
+    border: 3px solid var(--accent);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+  }
+  .deck-card:nth-child(1) { transform: translate(6px, 8px) rotate(3deg); }
+  .deck-card:nth-child(2) { transform: translate(3px, 4px) rotate(-2deg); }
+  .deck-card:nth-child(3) { transform: translate(0, 0) rotate(0deg); }
+  #picker-deck-view:hover .deck-card:nth-child(3) { transform: translate(0, -4px) rotate(0deg); }
+  .deck-hint {
+    font-size: 0.9rem;
+    color: var(--muted);
+    text-align: center;
+  }
+  .deck-hint b { color: var(--text); }
+
+  #picker-list-view {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  #picker-list-view[hidden] { display: none; }
   #picker-header {
     display: flex;
     gap: 0.5rem;
@@ -243,22 +317,26 @@
 </header>
 
 <div class="toolbar">
-  <button id="prev-page" type="button">&larr; Prev</button>
   <span id="page-indicator"></span>
-  <button id="next-page" type="button">Next &rarr;</button>
+  <span class="hint">Drag the page edge to flip</span>
   <span style="flex:1"></span>
   <button id="add-page" type="button">+ Add Page</button>
   <button id="remove-page" type="button">&minus; Remove Last Page</button>
 </div>
 
 <div class="binder-stage">
-  <div class="binder-frame">
-    <div class="binder-spine">
+  <div class="binder-frame" id="binder-frame">
+    <div class="page-slot" id="left-page-wrap">
+      <div class="flip-handle" id="backward-handle"></div>
+      <div class="pocket-grid" id="left-page-content"></div>
+    </div>
+    <div class="binder-spine-center">
       <div class="ring"></div><div class="ring"></div><div class="ring"></div>
       <div class="ring"></div><div class="ring"></div>
     </div>
-    <div id="binder-page">
-      <div class="pocket-grid" id="pocket-grid"></div>
+    <div class="page-slot" id="right-page-wrap">
+      <div class="pocket-grid" id="right-page-content"></div>
+      <div class="flip-handle" id="forward-handle"></div>
     </div>
   </div>
 </div>
@@ -266,11 +344,21 @@
 
 <div id="picker-modal">
   <div id="picker-inner">
-    <div id="picker-header">
-      <input id="picker-search" type="search" placeholder="Search your collection…">
-      <button id="picker-close" type="button">&times;</button>
+    <div id="picker-deck-view">
+      <div class="deck-stack">
+        <div class="deck-card"></div>
+        <div class="deck-card"></div>
+        <div class="deck-card"></div>
+      </div>
+      <div class="deck-hint">Click the deck to browse <b id="deck-count">…</b> cards from your collection</div>
     </div>
-    <div id="picker-list"></div>
+    <div id="picker-list-view" hidden>
+      <div id="picker-header">
+        <input id="picker-search" type="search" placeholder="Search your collection…">
+        <button id="picker-close" type="button">&times;</button>
+      </div>
+      <div id="picker-list"></div>
+    </div>
   </div>
 </div>
 
@@ -279,8 +367,8 @@ const binderId = window.location.pathname.split("/").filter(Boolean).pop();
 const SLOTS_PER_PAGE = 9;
 
 let binderData = null;   // { binder: {...}, slots: { "page:index": {...} } }
-let currentPage = 1;
-let pendingSlotIndex = null;
+let spreadIndex = 0;     // 0 = [null, 1]; k>=1 = [2k, 2k+1]
+let pendingTarget = null; // { page, index } currently open in the picker
 let ownedCards = [];
 
 function safeParseList(value) {
@@ -291,6 +379,14 @@ function safeParseList(value) {
   } catch {
     return [];
   }
+}
+
+function pagesForSpread(k) {
+  return k === 0 ? [null, 1] : [2 * k, 2 * k + 1];
+}
+
+function totalSpreads(pageCount) {
+  return 1 + Math.ceil(Math.max(pageCount - 1, 0) / 2);
 }
 
 async function loadBinder() {
@@ -305,26 +401,14 @@ async function loadBinder() {
   binderData = await res.json();
   document.getElementById("binder-name").textContent = binderData.binder.name;
   document.title = `${binderData.binder.name} — Binder`;
-  if (currentPage > binderData.binder.page_count) currentPage = binderData.binder.page_count;
-  renderPage();
+  const maxSpread = totalSpreads(binderData.binder.page_count) - 1;
+  if (spreadIndex > maxSpread) spreadIndex = maxSpread;
+  renderSpread();
 }
 
-function renderPage() {
-  const grid = document.getElementById("pocket-grid");
-  grid.innerHTML = "";
-  for (let i = 0; i < SLOTS_PER_PAGE; i++) {
-    grid.appendChild(pocketEl(i));
-  }
-  const pageCount = binderData.binder.page_count;
-  document.getElementById("page-indicator").textContent = `Page ${currentPage} / ${pageCount}`;
-  document.getElementById("prev-page").disabled = currentPage <= 1;
-  document.getElementById("next-page").disabled = currentPage >= pageCount;
-  document.getElementById("remove-page").disabled = pageCount <= 1;
-}
-
-function pocketEl(index) {
+function pocketEl(pageNum, index) {
   const el = document.createElement("div");
-  const slot = binderData.slots[`${currentPage}:${index}`];
+  const slot = binderData.slots[`${pageNum}:${index}`];
   if (slot) {
     el.className = "pocket filled";
     const img = slot.image_filename ? `/images/${slot.image_filename}` : "";
@@ -334,46 +418,142 @@ function pocketEl(index) {
     `;
     el.querySelector(".remove-btn").addEventListener("click", async e => {
       e.stopPropagation();
-      const key = `${currentPage}:${index}`;
+      const key = `${pageNum}:${index}`;
       const prevSlot = binderData.slots[key];
       delete binderData.slots[key];
-      renderPage();
-      const res = await fetch(`/api/binders/${binderId}/slots/${currentPage}/${index}`, { method: "DELETE" });
+      renderSpread();
+      const res = await fetch(`/api/binders/${binderId}/slots/${pageNum}/${index}`, { method: "DELETE" });
       if (!res.ok) {
         binderData.slots[key] = prevSlot;
-        renderPage();
+        renderSpread();
+      } else {
+        loadOwnedCardsIfPickerOpen();
       }
     });
   } else {
     el.className = "pocket empty";
     el.textContent = "+";
-    el.addEventListener("click", () => openPicker(index));
+    el.addEventListener("click", () => openPicker(pageNum, index));
   }
   return el;
 }
 
-async function flipToPage(newPage) {
-  const pageEl = document.getElementById("binder-page");
-  pageEl.classList.add("flipping");
-  setTimeout(() => {
-    currentPage = newPage;
-    renderPage();
-  }, 250);
-  setTimeout(() => pageEl.classList.remove("flipping"), 500);
+function renderPageInto(containerId, pageNum) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = "";
+  const wrap = el.closest(".page-slot");
+  const exists = pageNum !== null && pageNum <= binderData.binder.page_count;
+  wrap.classList.toggle("blank", !exists);
+  if (!exists) return;
+  for (let i = 0; i < SLOTS_PER_PAGE; i++) el.appendChild(pocketEl(pageNum, i));
 }
 
-document.getElementById("prev-page").addEventListener("click", () => {
-  if (currentPage > 1) flipToPage(currentPage - 1);
-});
-document.getElementById("next-page").addEventListener("click", () => {
-  if (currentPage < binderData.binder.page_count) flipToPage(currentPage + 1);
-});
+function renderSpread() {
+  const [leftNum, rightNum] = pagesForSpread(spreadIndex);
+  renderPageInto("left-page-content", leftNum);
+  renderPageInto("right-page-content", rightNum);
+
+  const pageCount = binderData.binder.page_count;
+  const maxSpread = totalSpreads(pageCount) - 1;
+  const label = leftNum
+    ? `Pages ${leftNum}–${Math.min(rightNum, pageCount)} of ${pageCount}`
+    : `Page 1 of ${pageCount}`;
+  document.getElementById("page-indicator").textContent = label;
+  document.getElementById("remove-page").disabled = pageCount <= 1;
+
+  document.getElementById("backward-handle").style.display = spreadIndex > 0 ? "flex" : "none";
+  document.getElementById("forward-handle").style.display = spreadIndex < maxSpread ? "flex" : "none";
+
+  // clear any leftover drag transforms
+  document.getElementById("left-page-wrap").style.transform = "";
+  document.getElementById("right-page-wrap").style.transform = "";
+}
+
+// --- drag-to-flip ---
+function setupDrag(handleEl, direction) {
+  handleEl.addEventListener("pointerdown", e => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const pageEl = direction === "forward"
+      ? document.getElementById("right-page-wrap")
+      : document.getElementById("left-page-wrap");
+    const pageWidth = pageEl.getBoundingClientRect().width || 300;
+    const maxSpread = totalSpreads(binderData.binder.page_count) - 1;
+    const canFlip = direction === "forward" ? spreadIndex < maxSpread : spreadIndex > 0;
+    if (!canFlip) return;
+
+    const beforeSpread = spreadIndex;
+    const afterSpread = direction === "forward" ? spreadIndex + 1 : spreadIndex - 1;
+    let swapped = false;
+    let maxProgress = 0;
+    handleEl.setPointerCapture(e.pointerId);
+    pageEl.style.transition = "none";
+
+    // Piecewise so the flip never actually passes 180deg (which would show
+    // mirrored content): angle rises 0->90 as the page turns edge-on, then
+    // the content underneath is swapped to the destination spread exactly
+    // at that edge-on (invisible) instant, and the angle falls 90->0 as it
+    // settles flat again — now showing the new page instead of the old one.
+    function applyProgress(progress) {
+      const angle = progress <= 0.5 ? progress * 180 : (1 - progress) * 180;
+      const signed = direction === "forward" ? -angle : angle;
+      const shouldSwap = progress > 0.5;
+      if (shouldSwap !== swapped) {
+        swapped = shouldSwap;
+        const showSpread = shouldSwap ? afterSpread : beforeSpread;
+        const [l, r] = pagesForSpread(showSpread);
+        renderPageInto("left-page-content", l);
+        renderPageInto("right-page-content", r);
+      }
+      pageEl.style.transform = `rotateY(${signed}deg)`;
+    }
+
+    function onMove(ev) {
+      const dx = direction === "forward" ? (startX - ev.clientX) : (ev.clientX - startX);
+      const progress = Math.min(Math.max(dx / pageWidth, 0), 1);
+      maxProgress = Math.max(maxProgress, progress);
+      applyProgress(progress);
+    }
+
+    function onUp() {
+      handleEl.releasePointerCapture(e.pointerId);
+      handleEl.removeEventListener("pointermove", onMove);
+      handleEl.removeEventListener("pointerup", onUp);
+      pageEl.style.transition = "transform 0.18s ease";
+
+      const wasQuickClick = maxProgress < 0.08;
+      const commit = wasQuickClick ? true : swapped;
+
+      if (wasQuickClick && !swapped) {
+        // quick click with no drag: auto-play the flip instead of no-op
+        const [l, r] = pagesForSpread(afterSpread);
+        renderPageInto("left-page-content", l);
+        renderPageInto("right-page-content", r);
+      }
+
+      pageEl.style.transform = "rotateY(0deg)";
+      setTimeout(() => {
+        pageEl.style.transition = "";
+        spreadIndex = commit ? afterSpread : beforeSpread;
+        renderSpread();
+      }, 180);
+    }
+
+    handleEl.addEventListener("pointermove", onMove);
+    handleEl.addEventListener("pointerup", onUp);
+  });
+}
+
+setupDrag(document.getElementById("forward-handle"), "forward");
+setupDrag(document.getElementById("backward-handle"), "backward");
 
 document.getElementById("add-page").addEventListener("click", async () => {
   const res = await fetch(`/api/binders/${binderId}/pages`, { method: "POST" });
   const data = await res.json();
   binderData.binder.page_count = data.page_count;
-  flipToPage(data.page_count);
+  spreadIndex = totalSpreads(data.page_count) - 1;
+  renderSpread();
 });
 
 document.getElementById("remove-page").addEventListener("click", async () => {
@@ -387,24 +567,36 @@ document.getElementById("remove-page").addEventListener("click", async () => {
       if (key.startsWith(`${pageCount}:`)) delete binderData.slots[key];
     });
     binderData.binder.page_count = data.page_count;
-    if (currentPage > data.page_count) currentPage = data.page_count;
-    renderPage();
+    const maxSpread = totalSpreads(data.page_count) - 1;
+    if (spreadIndex > maxSpread) spreadIndex = maxSpread;
+    renderSpread();
+    loadOwnedCardsIfPickerOpen();
   }
 });
 
-// --- card picker ---
-function openPicker(slotIndex) {
-  pendingSlotIndex = slotIndex;
+// --- card picker (deck reveal -> searchable list) ---
+function openPicker(pageNum, index) {
+  pendingTarget = { page: pageNum, index };
   document.getElementById("picker-modal").classList.add("visible");
+  document.getElementById("picker-deck-view").hidden = false;
+  document.getElementById("picker-list-view").hidden = true;
   document.getElementById("picker-search").value = "";
-  document.getElementById("picker-search").focus();
-  loadOwnedCards("");
+  fetch(`/api/collection/cards`).then(r => r.json()).then(cards => {
+    document.getElementById("deck-count").textContent = cards.length;
+  });
 }
 
 function closePicker() {
   document.getElementById("picker-modal").classList.remove("visible");
-  pendingSlotIndex = null;
+  pendingTarget = null;
 }
+
+document.getElementById("picker-deck-view").addEventListener("click", () => {
+  document.getElementById("picker-deck-view").hidden = true;
+  document.getElementById("picker-list-view").hidden = false;
+  document.getElementById("picker-search").focus();
+  loadOwnedCards("");
+});
 
 document.getElementById("picker-close").addEventListener("click", closePicker);
 document.getElementById("picker-modal").addEventListener("click", e => {
@@ -423,13 +615,20 @@ async function loadOwnedCards(search) {
   renderPickerList();
 }
 
+function loadOwnedCardsIfPickerOpen() {
+  if (document.getElementById("picker-modal").classList.contains("visible") &&
+      !document.getElementById("picker-list-view").hidden) {
+    loadOwnedCards(document.getElementById("picker-search").value.trim());
+  }
+}
+
 const VARIANT_LABELS = { normal: "Normal", reverse_holo: "Reverse Holo" };
 
 function renderPickerList() {
   const list = document.getElementById("picker-list");
   list.innerHTML = "";
   if (!ownedCards.length) {
-    list.innerHTML = '<div id="picker-empty">No matching cards in your collection.</div>';
+    list.innerHTML = '<div id="picker-empty">No matching cards free to place — everything you own is already in a binder.</div>';
     return;
   }
   ownedCards.forEach(card => {
@@ -449,22 +648,22 @@ function renderPickerList() {
 }
 
 async function assignCard(card) {
-  if (pendingSlotIndex === null) return;
-  const slotIndex = pendingSlotIndex;
+  if (!pendingTarget) return;
+  const { page, index } = pendingTarget;
   closePicker();
 
-  binderData.slots[`${currentPage}:${slotIndex}`] = {
-    page_number: currentPage, slot_index: slotIndex, variant: card.variant,
+  binderData.slots[`${page}:${index}`] = {
+    page_number: page, slot_index: index, variant: card.variant,
     card_id: card.id, name: card.name, image_filename: card.image_filename,
     set_name: card.set_name, number: card.number, rarity: card.rarity,
   };
-  renderPage();
+  renderSpread();
 
   const params = new URLSearchParams({ card_id: card.id, variant: card.variant });
-  const res = await fetch(`/api/binders/${binderId}/slots/${currentPage}/${slotIndex}?${params}`, { method: "PUT" });
+  const res = await fetch(`/api/binders/${binderId}/slots/${page}/${index}?${params}`, { method: "PUT" });
   if (!res.ok) {
-    delete binderData.slots[`${currentPage}:${slotIndex}`];
-    renderPage();
+    delete binderData.slots[`${page}:${index}`];
+    renderSpread();
   }
 }
 

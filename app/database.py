@@ -404,11 +404,13 @@ def collection_summary() -> dict:
 
 
 def list_owned_cards(search: str = "") -> list[dict]:
-    """Owned (card, variant) pairs for the binder card picker — one row per
-    variant so a card owned as both normal and reverse holo shows twice."""
+    """Owned (card, variant) pairs still free to place in a binder. A copy
+    already sitting in any binder slot (any binder, not just the current
+    one — you only have the one physical card) counts against the owned
+    quantity, so a card drops out of the picker once every copy has a home."""
     conn = get_connection()
     try:
-        clauses = ["collection.quantity > 0"]
+        clauses = ["(collection.quantity - COALESCE(placed.placed_count, 0)) > 0"]
         params: list = []
         if search:
             clauses.append("cards.name LIKE ? COLLATE NOCASE")
@@ -417,8 +419,15 @@ def list_owned_cards(search: str = "") -> list[dict]:
         rows = conn.execute(
             f"""
             SELECT cards.id, cards.name, cards.image_filename, cards.set_name, cards.number,
-                   cards.rarity, collection.variant, collection.quantity
-            FROM collection JOIN cards ON cards.id = collection.card_id
+                   cards.rarity, collection.variant,
+                   (collection.quantity - COALESCE(placed.placed_count, 0)) AS quantity
+            FROM collection
+            JOIN cards ON cards.id = collection.card_id
+            LEFT JOIN (
+                SELECT card_id, variant, COUNT(*) AS placed_count
+                FROM binder_slots
+                GROUP BY card_id, variant
+            ) AS placed ON placed.card_id = collection.card_id AND placed.variant = collection.variant
             {where}
             ORDER BY cards.name COLLATE NOCASE, collection.variant
             """,

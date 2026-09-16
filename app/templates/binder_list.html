@@ -71,57 +71,97 @@
   #new-binder-form button:disabled { opacity: 0.5; cursor: default; }
   #grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1.2rem;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 1.6rem;
     padding: 1.5rem;
-    max-width: 1100px;
+    max-width: 1200px;
   }
   .binder-cover {
     position: relative;
-    background: linear-gradient(135deg, #2a2c38, #1d1f27);
+    aspect-ratio: 3 / 4;
+    background:
+      linear-gradient(160deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 40%),
+      linear-gradient(135deg, #333648, #1a1c25 65%);
     border: 1px solid var(--border);
-    border-left: 10px solid #3a3d4d;
-    border-radius: 4px 10px 10px 4px;
-    padding: 1.4rem 1.2rem;
-    min-height: 150px;
+    border-radius: 6px 10px 10px 6px;
+    padding: 1rem 1rem 1rem 2rem;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
     cursor: pointer;
-    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    box-shadow: 0 10px 22px rgba(0,0,0,0.4);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
     text-decoration: none;
     color: var(--text);
+    overflow: hidden;
+  }
+  .binder-cover::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 1.4rem;
+    background: linear-gradient(180deg, #454859, #23252f);
+    box-shadow: inset -3px 0 6px rgba(0,0,0,0.4);
   }
   .binder-cover:hover {
-    transform: translateY(-3px) rotate(-0.5deg);
-    box-shadow: 0 10px 22px rgba(0,0,0,0.45);
-    border-left-color: var(--accent);
+    transform: translateY(-5px) rotate(-0.5deg);
+    box-shadow: 0 16px 30px rgba(0,0,0,0.5);
   }
-  .binder-cover .name {
-    font-size: 1.05rem;
+  .binder-rings {
+    position: absolute;
+    left: 0.45rem;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+    align-items: center;
+    z-index: 1;
+  }
+  .binder-rings span {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #14151a;
+    border: 1px solid #565a6c;
+  }
+  .binder-cover .label {
+    background: #eef0f5;
+    color: #1a1b22;
+    border-radius: 4px;
+    padding: 0.55rem 0.5rem;
     font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.2;
+    text-align: center;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.35);
+    word-break: break-word;
+    margin-top: 1.6rem;
   }
-  .binder-cover .meta {
+  .binder-cover .stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
     font-size: 0.78rem;
     color: var(--muted);
-    margin-top: 0.4rem;
   }
+  .binder-cover .stats b { color: var(--text); }
   .binder-cover .delete-btn {
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    width: 1.8rem;
-    height: 1.8rem;
+    width: 1.7rem;
+    height: 1.7rem;
     border-radius: 50%;
     border: 1px solid var(--border);
-    background: rgba(20,21,26,0.7);
+    background: rgba(20,21,26,0.75);
     color: var(--muted);
     font-size: 0.85rem;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
+    z-index: 2;
   }
   .binder-cover .delete-btn:hover { border-color: #ef4444; color: #ef4444; }
   #status-line {
@@ -154,15 +194,16 @@ function binderCoverEl(binder) {
   const a = document.createElement("a");
   a.className = "binder-cover";
   a.href = `/binder/${binder.id}`;
-  const totalSlots = binder.page_count * 9;
   a.innerHTML = `
     <button class="delete-btn" type="button" title="Delete binder">&times;</button>
-    <div>
-      <div class="name"></div>
-      <div class="meta">${binder.page_count} page${binder.page_count === 1 ? "" : "s"} &middot; ${binder.filled_count} / ${totalSlots} filled</div>
+    <div class="binder-rings"><span></span><span></span><span></span><span></span><span></span></div>
+    <div class="label"></div>
+    <div class="stats">
+      <span>📄 <b>${binder.page_count}</b> page${binder.page_count === 1 ? "" : "s"}</span>
+      <span>🃏 <b>${binder.filled_count}</b> card${binder.filled_count === 1 ? "" : "s"}</span>
     </div>
   `;
-  a.querySelector(".name").textContent = binder.name;
+  a.querySelector(".label").textContent = binder.name;
   a.querySelector(".delete-btn").addEventListener("click", async e => {
     e.preventDefault();
     e.stopPropagation();
