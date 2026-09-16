@@ -51,6 +51,7 @@
     font-size: 0.85rem;
     color: var(--muted);
   }
+  .toolbar[hidden], .workspace[hidden] { display: none; }
   .toolbar button {
     background: var(--panel);
     color: var(--text);
@@ -65,11 +66,19 @@
   #page-indicator { font-weight: 600; color: var(--text); }
   .hint { font-size: 0.78rem; color: var(--muted); }
 
+  .workspace {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 2rem;
+    padding: 2.5rem 1.5rem;
+  }
+
   .binder-stage {
     display: flex;
     justify-content: center;
-    padding: 3rem 1rem;
-    perspective: 2000px;
+    perspective: 2200px;
     user-select: none;
   }
   .binder-frame {
@@ -79,12 +88,12 @@
     transform: rotateX(3deg);
   }
   .page-slot {
-    width: min(340px, 42vw);
+    width: clamp(260px, 32vw, 480px);
     background: var(--panel);
     border: 1px solid var(--border);
-    padding: 1.1rem;
+    padding: 1.3rem;
     position: relative;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.45);
+    box-shadow: 0 24px 48px rgba(0,0,0,0.45);
     transform-style: preserve-3d;
     backface-visibility: hidden;
   }
@@ -100,7 +109,7 @@
   }
   .page-slot.blank .pocket-grid { visibility: hidden; }
   .binder-spine-center {
-    width: 22px;
+    width: 24px;
     background: linear-gradient(90deg, #23252f, #3a3d4d, #23252f);
     display: flex;
     flex-direction: column;
@@ -110,8 +119,8 @@
     z-index: 3;
   }
   .binder-spine-center .ring {
-    width: 11px;
-    height: 11px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: #14151a;
     border: 1px solid #565a6c;
@@ -119,7 +128,7 @@
   .pocket-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 0.6rem;
+    gap: 0.7rem;
   }
   .pocket {
     aspect-ratio: 5 / 7;
@@ -136,9 +145,19 @@
     align-items: center;
     justify-content: center;
     color: var(--muted);
-    font-size: 1.4rem;
+    font-size: 1.5rem;
   }
   .pocket.empty:hover { border-color: var(--accent); color: var(--accent); }
+  .pocket.empty.placeable {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(255,203,5,0.06);
+    animation: pulseBorder 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseBorder {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,203,5,0); }
+    50% { box-shadow: 0 0 0 5px rgba(255,203,5,0.15); }
+  }
   .pocket img {
     width: 100%;
     height: 100%;
@@ -171,7 +190,7 @@
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 22px;
+    width: 24px;
     cursor: grab;
     z-index: 2;
     display: flex;
@@ -182,7 +201,7 @@
   .flip-handle::before {
     content: "";
     width: 4px;
-    height: 42px;
+    height: 48px;
     border-radius: 4px;
     background: rgba(255,203,5,0.25);
     transition: background 0.15s ease;
@@ -193,42 +212,39 @@
 
   #status-line { text-align: center; color: var(--muted); padding: 2rem; }
 
-  #picker-modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.75);
-    z-index: 100;
-    align-items: center;
-    justify-content: center;
-    padding: 1.5rem;
+  /* --- persistent deck panel --- */
+  .deck-panel {
+    flex: 0 0 260px;
+    max-width: 300px;
+    position: sticky;
+    top: 1.5rem;
   }
-  #picker-modal.visible { display: flex; }
-  #picker-inner {
+  @keyframes nudge {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-6px); }
+    75% { transform: translateX(6px); }
+  }
+  .deck-panel.nudge .deck-header { animation: nudge 0.3s ease; }
+  .deck-header {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 12px;
-    width: min(480px, 100%);
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* --- deck-reveal stage --- */
-  #picker-deck-view {
-    padding: 2.5rem 1.5rem;
+    padding: 1.5rem 1rem;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 1.2rem;
+    gap: 1rem;
     cursor: pointer;
   }
-  #picker-deck-view[hidden] { display: none; }
+  .deck-panel.expanded .deck-header {
+    border-radius: 12px 12px 0 0;
+    border-bottom: none;
+    padding: 1rem;
+  }
   .deck-stack {
     position: relative;
-    width: 130px;
-    height: 182px;
+    width: 100px;
+    height: 140px;
   }
   .deck-card {
     position: absolute;
@@ -240,63 +256,82 @@
     border: 3px solid var(--accent);
     box-shadow: 0 10px 20px rgba(0,0,0,0.5);
   }
-  .deck-card:nth-child(1) { transform: translate(6px, 8px) rotate(3deg); }
-  .deck-card:nth-child(2) { transform: translate(3px, 4px) rotate(-2deg); }
+  .deck-card:nth-child(1) { transform: translate(5px, 7px) rotate(3deg); }
+  .deck-card:nth-child(2) { transform: translate(2.5px, 3.5px) rotate(-2deg); }
   .deck-card:nth-child(3) { transform: translate(0, 0) rotate(0deg); }
-  #picker-deck-view:hover .deck-card:nth-child(3) { transform: translate(0, -4px) rotate(0deg); }
+  .deck-header:hover .deck-card:nth-child(3) { transform: translate(0, -4px) rotate(0deg); }
   .deck-hint {
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     color: var(--muted);
     text-align: center;
   }
   .deck-hint b { color: var(--text); }
 
-  #picker-list-view {
+  .deck-expand {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+  }
+  .deck-panel.expanded .deck-expand { max-height: 65vh; }
+  .deck-expand-inner {
     display: flex;
     flex-direction: column;
-    min-height: 0;
+    max-height: 65vh;
   }
-  #picker-list-view[hidden] { display: none; }
-  #picker-header {
+  .placing-banner {
     display: flex;
+    align-items: center;
     gap: 0.5rem;
-    padding: 1rem;
+    background: rgba(255,203,5,0.1);
     border-bottom: 1px solid var(--border);
+    padding: 0.6rem 0.8rem;
+    font-size: 0.82rem;
   }
-  #picker-search {
-    flex: 1;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.7rem;
-    font-size: 0.9rem;
-  }
-  #picker-close {
+  .placing-banner[hidden] { display: none; }
+  .placing-banner b { color: var(--accent); }
+  .placing-banner button {
+    margin-left: auto;
     background: transparent;
     border: 1px solid var(--border);
-    color: var(--text);
+    color: var(--muted);
     border-radius: 6px;
-    width: 2.2rem;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
     cursor: pointer;
-    font-size: 1rem;
+  }
+  .placing-banner button:hover { border-color: #ef4444; color: #ef4444; }
+  #picker-search {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 0.7rem 0.9rem;
+    font-size: 0.9rem;
   }
   #picker-list {
     overflow-y: auto;
-    padding: 0.5rem;
+    padding: 0.4rem;
+    min-height: 0;
   }
   .picker-item {
     display: flex;
     align-items: center;
-    gap: 0.7rem;
-    padding: 0.5rem;
+    gap: 0.6rem;
+    padding: 0.45rem;
     border-radius: 8px;
     cursor: pointer;
+    border: 1px solid transparent;
   }
   .picker-item:hover { background: var(--bg); }
+  .picker-item.selected { border-color: var(--accent); background: rgba(255,203,5,0.08); }
   .picker-item img {
-    width: 34px;
-    height: 47px;
+    width: 30px;
+    height: 42px;
     object-fit: contain;
     background: #0c0d10;
     border-radius: 3px;
@@ -304,9 +339,9 @@
     color: transparent;
     font-size: 0;
   }
-  .picker-item .name { font-size: 0.9rem; font-weight: 600; }
-  .picker-item .sub { font-size: 0.75rem; color: var(--muted); }
-  #picker-empty { padding: 1.5rem; color: var(--muted); text-align: center; font-size: 0.9rem; }
+  .picker-item .name { font-size: 0.85rem; font-weight: 600; }
+  .picker-item .sub { font-size: 0.72rem; color: var(--muted); }
+  #picker-empty { padding: 1.2rem; color: var(--muted); text-align: center; font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -324,51 +359,55 @@
   <button id="remove-page" type="button">&minus; Remove Last Page</button>
 </div>
 
-<div class="binder-stage">
-  <div class="binder-frame" id="binder-frame">
-    <div class="page-slot" id="left-page-wrap">
-      <div class="flip-handle" id="backward-handle"></div>
-      <div class="pocket-grid" id="left-page-content"></div>
-    </div>
-    <div class="binder-spine-center">
-      <div class="ring"></div><div class="ring"></div><div class="ring"></div>
-      <div class="ring"></div><div class="ring"></div>
-    </div>
-    <div class="page-slot" id="right-page-wrap">
-      <div class="pocket-grid" id="right-page-content"></div>
-      <div class="flip-handle" id="forward-handle"></div>
+<div class="workspace">
+  <div class="binder-stage">
+    <div class="binder-frame" id="binder-frame">
+      <div class="page-slot" id="left-page-wrap">
+        <div class="flip-handle" id="backward-handle"></div>
+        <div class="pocket-grid" id="left-page-content"></div>
+      </div>
+      <div class="binder-spine-center">
+        <div class="ring"></div><div class="ring"></div><div class="ring"></div>
+        <div class="ring"></div><div class="ring"></div>
+      </div>
+      <div class="page-slot" id="right-page-wrap">
+        <div class="pocket-grid" id="right-page-content"></div>
+        <div class="flip-handle" id="forward-handle"></div>
+      </div>
     </div>
   </div>
-</div>
-<div id="status-line"></div>
 
-<div id="picker-modal">
-  <div id="picker-inner">
-    <div id="picker-deck-view">
+  <div class="deck-panel" id="deck-panel">
+    <div class="deck-header" id="deck-header">
       <div class="deck-stack">
         <div class="deck-card"></div>
         <div class="deck-card"></div>
         <div class="deck-card"></div>
       </div>
-      <div class="deck-hint">Click the deck to browse <b id="deck-count">…</b> cards from your collection</div>
+      <div class="deck-hint" id="deck-hint">Click to browse <b id="deck-count">…</b> available cards</div>
     </div>
-    <div id="picker-list-view" hidden>
-      <div id="picker-header">
+    <div class="deck-expand" id="deck-expand">
+      <div class="deck-expand-inner">
+        <div class="placing-banner" id="placing-banner" hidden>
+          <span>Placing <b id="placing-name"></b></span>
+          <button id="cancel-placing" type="button">Cancel</button>
+        </div>
         <input id="picker-search" type="search" placeholder="Search your collection…">
-        <button id="picker-close" type="button">&times;</button>
+        <div id="picker-list"></div>
       </div>
-      <div id="picker-list"></div>
     </div>
   </div>
 </div>
+<div id="status-line"></div>
 
 <script>
 const binderId = window.location.pathname.split("/").filter(Boolean).pop();
 const SLOTS_PER_PAGE = 9;
+const VARIANT_LABELS = { normal: "Normal", reverse_holo: "Reverse Holo" };
 
-let binderData = null;   // { binder: {...}, slots: { "page:index": {...} } }
-let spreadIndex = 0;     // 0 = [null, 1]; k>=1 = [2k, 2k+1]
-let pendingTarget = null; // { page, index } currently open in the picker
+let binderData = null;    // { binder: {...}, slots: { "page:index": {...} } }
+let spreadIndex = 0;      // 0 = [null, 1]; k>=1 = [2k, 2k+1]
+let selectedCard = null;  // the owned-card row chosen from the deck list, waiting for a pocket
 let ownedCards = [];
 
 function safeParseList(value) {
@@ -395,7 +434,7 @@ async function loadBinder() {
     document.getElementById("binder-name").textContent = "Binder not found";
     document.getElementById("status-line").textContent = "This binder doesn't exist.";
     document.querySelector(".toolbar").hidden = true;
-    document.querySelector(".binder-stage").hidden = true;
+    document.querySelector(".workspace").hidden = true;
     return;
   }
   binderData = await res.json();
@@ -404,6 +443,7 @@ async function loadBinder() {
   const maxSpread = totalSpreads(binderData.binder.page_count) - 1;
   if (spreadIndex > maxSpread) spreadIndex = maxSpread;
   renderSpread();
+  refreshDeckCount();
 }
 
 function pocketEl(pageNum, index) {
@@ -427,13 +467,20 @@ function pocketEl(pageNum, index) {
         binderData.slots[key] = prevSlot;
         renderSpread();
       } else {
-        loadOwnedCardsIfPickerOpen();
+        refreshDeckCount();
+        refreshPickerIfOpen();
       }
     });
   } else {
-    el.className = "pocket empty";
+    el.className = "pocket empty" + (selectedCard ? " placeable" : "");
     el.textContent = "+";
-    el.addEventListener("click", () => openPicker(pageNum, index));
+    el.addEventListener("click", () => {
+      if (selectedCard) {
+        placeSelectedCard(pageNum, index);
+      } else {
+        nudgeDeckPanel();
+      }
+    });
   }
   return el;
 }
@@ -570,38 +617,35 @@ document.getElementById("remove-page").addEventListener("click", async () => {
     const maxSpread = totalSpreads(data.page_count) - 1;
     if (spreadIndex > maxSpread) spreadIndex = maxSpread;
     renderSpread();
-    loadOwnedCardsIfPickerOpen();
+    refreshDeckCount();
+    refreshPickerIfOpen();
   }
 });
 
-// --- card picker (deck reveal -> searchable list) ---
-function openPicker(pageNum, index) {
-  pendingTarget = { page: pageNum, index };
-  document.getElementById("picker-modal").classList.add("visible");
-  document.getElementById("picker-deck-view").hidden = false;
-  document.getElementById("picker-list-view").hidden = true;
-  document.getElementById("picker-search").value = "";
-  fetch(`/api/collection/cards`).then(r => r.json()).then(cards => {
-    document.getElementById("deck-count").textContent = cards.length;
-  });
-}
-
-function closePicker() {
-  document.getElementById("picker-modal").classList.remove("visible");
-  pendingTarget = null;
-}
-
-document.getElementById("picker-deck-view").addEventListener("click", () => {
-  document.getElementById("picker-deck-view").hidden = true;
-  document.getElementById("picker-list-view").hidden = false;
-  document.getElementById("picker-search").focus();
-  loadOwnedCards("");
+// --- persistent deck panel: click to expand, click a card, then click a pocket ---
+document.getElementById("deck-header").addEventListener("click", () => {
+  const panel = document.getElementById("deck-panel");
+  const expanding = !panel.classList.contains("expanded");
+  panel.classList.toggle("expanded", expanding);
+  if (expanding) {
+    document.getElementById("picker-search").value = "";
+    loadOwnedCards("");
+    document.getElementById("picker-search").focus();
+  } else {
+    cancelPlacing();
+  }
 });
 
-document.getElementById("picker-close").addEventListener("click", closePicker);
-document.getElementById("picker-modal").addEventListener("click", e => {
-  if (e.target.id === "picker-modal") closePicker();
-});
+function nudgeDeckPanel() {
+  const panel = document.getElementById("deck-panel");
+  panel.classList.remove("nudge");
+  void panel.offsetWidth; // restart the animation if it's already mid-nudge
+  panel.classList.add("nudge");
+  setTimeout(() => panel.classList.remove("nudge"), 350);
+  if (!panel.classList.contains("expanded")) {
+    document.getElementById("deck-header").click();
+  }
+}
 
 let searchDebounce;
 document.getElementById("picker-search").addEventListener("input", e => {
@@ -609,20 +653,23 @@ document.getElementById("picker-search").addEventListener("input", e => {
   searchDebounce = setTimeout(() => loadOwnedCards(e.target.value.trim()), 250);
 });
 
+async function refreshDeckCount() {
+  const res = await fetch(`/api/collection/cards`);
+  const cards = await res.json();
+  document.getElementById("deck-count").textContent = cards.length;
+}
+
 async function loadOwnedCards(search) {
   const res = await fetch(`/api/collection/cards?search=${encodeURIComponent(search)}`);
   ownedCards = await res.json();
   renderPickerList();
 }
 
-function loadOwnedCardsIfPickerOpen() {
-  if (document.getElementById("picker-modal").classList.contains("visible") &&
-      !document.getElementById("picker-list-view").hidden) {
+function refreshPickerIfOpen() {
+  if (document.getElementById("deck-panel").classList.contains("expanded")) {
     loadOwnedCards(document.getElementById("picker-search").value.trim());
   }
 }
-
-const VARIANT_LABELS = { normal: "Normal", reverse_holo: "Reverse Holo" };
 
 function renderPickerList() {
   const list = document.getElementById("picker-list");
@@ -634,6 +681,9 @@ function renderPickerList() {
   ownedCards.forEach(card => {
     const item = document.createElement("div");
     item.className = "picker-item";
+    if (selectedCard && selectedCard.id === card.id && selectedCard.variant === card.variant) {
+      item.classList.add("selected");
+    }
     const img = card.image_filename ? `/images/${card.image_filename}` : "";
     item.innerHTML = `
       <img src="${img}" alt="${card.name}">
@@ -642,29 +692,56 @@ function renderPickerList() {
         <div class="sub">${card.set_name || ""} · #${card.number || "?"} · ${VARIANT_LABELS[card.variant] || card.variant} &times;${card.quantity}</div>
       </div>
     `;
-    item.addEventListener("click", () => assignCard(card));
+    item.addEventListener("click", () => selectCard(card, item));
     list.appendChild(item);
   });
 }
 
-async function assignCard(card) {
-  if (!pendingTarget) return;
-  const { page, index } = pendingTarget;
-  closePicker();
+function selectCard(card, itemEl) {
+  selectedCard = card;
+  document.querySelectorAll(".picker-item.selected").forEach(el => el.classList.remove("selected"));
+  itemEl.classList.add("selected");
+  document.getElementById("placing-banner").hidden = false;
+  document.getElementById("placing-name").textContent =
+    `${card.name} (${VARIANT_LABELS[card.variant] || card.variant})`;
+  updatePlaceableHighlights();
+}
 
-  binderData.slots[`${page}:${index}`] = {
-    page_number: page, slot_index: index, variant: card.variant,
+document.getElementById("cancel-placing").addEventListener("click", () => cancelPlacing());
+
+function cancelPlacing() {
+  selectedCard = null;
+  document.getElementById("placing-banner").hidden = true;
+  document.querySelectorAll(".picker-item.selected").forEach(el => el.classList.remove("selected"));
+  updatePlaceableHighlights();
+}
+
+function updatePlaceableHighlights() {
+  document.querySelectorAll(".pocket.empty").forEach(el => {
+    el.classList.toggle("placeable", !!selectedCard);
+  });
+}
+
+async function placeSelectedCard(pageNum, index) {
+  if (!selectedCard) return;
+  const card = selectedCard;
+  cancelPlacing();
+
+  binderData.slots[`${pageNum}:${index}`] = {
+    page_number: pageNum, slot_index: index, variant: card.variant,
     card_id: card.id, name: card.name, image_filename: card.image_filename,
     set_name: card.set_name, number: card.number, rarity: card.rarity,
   };
   renderSpread();
 
   const params = new URLSearchParams({ card_id: card.id, variant: card.variant });
-  const res = await fetch(`/api/binders/${binderId}/slots/${page}/${index}?${params}`, { method: "PUT" });
+  const res = await fetch(`/api/binders/${binderId}/slots/${pageNum}/${index}?${params}`, { method: "PUT" });
   if (!res.ok) {
-    delete binderData.slots[`${page}:${index}`];
+    delete binderData.slots[`${pageNum}:${index}`];
     renderSpread();
   }
+  refreshDeckCount();
+  refreshPickerIfOpen();
 }
 
 loadBinder();
