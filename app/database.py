@@ -27,7 +27,7 @@ SORT_COLUMNS = {
 CARD_COLUMNS = [
     "id", "name", "supertype", "subtypes", "types", "hp", "hp_sort", "rarity",
     "set_id", "set_name", "series", "set_release_date", "number", "number_sort",
-    "artist", "pokedex_number", "language", "image_url", "image_filename",
+    "artist", "pokedex_number", "language", "variants", "image_url", "image_filename",
 ]
 
 _UPSERT_CARD_SQL = f"""
@@ -76,6 +76,7 @@ def init_db():
             artist TEXT,
             pokedex_number INTEGER,
             language TEXT NOT NULL DEFAULT 'en',
+            variants TEXT,
             image_url TEXT,
             image_filename TEXT,
             synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -108,6 +109,8 @@ def init_db():
         conn.execute("ALTER TABLE cards ADD COLUMN pokedex_number INTEGER")
     if "language" not in cols:
         conn.execute("ALTER TABLE cards ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
+    if "variants" not in cols:
+        conn.execute("ALTER TABLE cards ADD COLUMN variants TEXT")
     conn.commit()
 
     # Migration: the original collection table had no `variant` column and
@@ -238,6 +241,7 @@ def query_cards(
     supertype: str = "",
     card_type: str = "",
     language: str = "",
+    has_variant: str = "",
     owned: bool = False,
     sort: str = "set",
     order: str = "asc",
@@ -267,6 +271,9 @@ def query_cards(
         if language:
             clauses.append("cards.language = ?")
             params.append(language)
+        if has_variant:
+            clauses.append("cards.variants LIKE ?")
+            params.append(f'%"{has_variant}"%')
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         joined = "FROM cards LEFT JOIN collection ON collection.card_id = cards.id"
@@ -309,6 +316,38 @@ def query_cards(
             "page_size": page_size,
             "pages": max((total + page_size - 1) // page_size, 1),
         }
+    finally:
+        conn.close()
+
+
+def get_master_set(set_id: str) -> Optional[dict]:
+    """Every card in one set, ordered by number, with its variants and
+    current collection state — the checklist view for chasing a full
+    master set (every card in every print variant it actually exists in)."""
+    conn = get_connection()
+    try:
+        meta = conn.execute(
+            "SELECT set_id AS id, set_name AS name, series, set_release_date AS release_date, language "
+            "FROM cards WHERE set_id = ? LIMIT 1",
+            (set_id,),
+        ).fetchone()
+        if not meta:
+            return None
+
+        rows = conn.execute(
+            """
+            SELECT cards.*,
+                   COALESCE(SUM(CASE WHEN collection.variant = 'normal' THEN collection.quantity END), 0) AS owned_normal,
+                   COALESCE(SUM(CASE WHEN collection.variant = 'reverse_holo' THEN collection.quantity END), 0) AS owned_reverse_holo
+            FROM cards LEFT JOIN collection ON collection.card_id = cards.id
+            WHERE cards.set_id = ?
+            GROUP BY cards.id
+            ORDER BY number_sort IS NULL, number_sort, name COLLATE NOCASE
+            """,
+            (set_id,),
+        ).fetchall()
+
+        return {"set": dict(meta), "cards": [dict(r) for r in rows]}
     finally:
         conn.close()
 

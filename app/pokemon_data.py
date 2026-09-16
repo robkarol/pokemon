@@ -156,6 +156,25 @@ def _extract_int(value: Optional[str]) -> Optional[int]:
     return int(match.group()) if match else None
 
 
+# pokemontcg.io doesn't publish print-variant availability directly, but each
+# card's tcgplayer pricing keys are effectively a per-card variant list (only
+# keys for variants that were actually printed get a price entry at all).
+def _variants_from_card(card: dict) -> list[str]:
+    prices = ((card.get("tcgplayer") or {}).get("prices")) or {}
+    variants: set[str] = set()
+    for key in prices:
+        kl = key.lower()
+        if "reverse" in kl:
+            variants.add("reverse_holo")
+        elif "holo" in kl:
+            variants.add("holo")
+        else:
+            variants.add("normal")
+        if "1st" in kl or "firstedition" in kl:
+            variants.add("first_edition")
+    return sorted(variants)
+
+
 def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
     images = card.get("images") or {}
     image_url = images.get("large") or images.get("small")
@@ -184,6 +203,7 @@ def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
         card.get("artist"),
         dex_numbers[0] if dex_numbers else None,
         "en",
+        json.dumps(_variants_from_card(card)),
         image_url,
         image_filename,
     )

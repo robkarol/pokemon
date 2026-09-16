@@ -117,6 +117,20 @@ def _card_subtypes(card: dict) -> list[str]:
     return subtypes
 
 
+_TCGDEX_VARIANT_MAP = {
+    "normal": "normal",
+    "holo": "holo",
+    "reverse": "reverse_holo",
+    "firstEdition": "first_edition",
+    "wPromo": "promo",
+}
+
+
+def _card_variants(card: dict) -> list[str]:
+    flags = card.get("variants") or {}
+    return sorted(mapped for key, mapped in _TCGDEX_VARIANT_MAP.items() if flags.get(key))
+
+
 def _process_card(lang: str, card_id: str, set_meta: dict) -> Optional[tuple]:
     card = _request_json(f"{API_BASE}/{lang}/cards/{card_id}")
     if not card:
@@ -156,6 +170,7 @@ def _process_card(lang: str, card_id: str, set_meta: dict) -> Optional[tuple]:
         card.get("illustrator"),
         dex_numbers[0] if dex_numbers else None,
         lang,
+        json.dumps(_card_variants(card)),
         image_url,
         image_filename,
     )

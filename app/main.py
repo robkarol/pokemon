@@ -5,13 +5,14 @@ SQLite metadata cache and a flat folder of downloaded card images.
 import asyncio
 import logging
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import (
-    get_facets, has_data, init_db, query_cards, set_collection_quantity, collection_summary,
+    get_facets, get_master_set, has_data, init_db, query_cards,
+    set_collection_quantity, collection_summary,
 )
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
@@ -55,6 +56,7 @@ def api_cards(
     supertype: str = "",
     type: str = "",
     language: str = "",
+    has_variant: str = "",
     owned: bool = False,
     sort: str = "set",
     order: str = "asc",
@@ -71,6 +73,7 @@ def api_cards(
         supertype=supertype,
         card_type=type,
         language=language,
+        has_variant=has_variant,
         owned=owned,
         sort=sort,
         order=order,
@@ -82,6 +85,19 @@ def api_cards(
 @app.get("/api/facets")
 def api_facets():
     return get_facets()
+
+
+@app.get("/master/{set_id}")
+async def master_set_page(request: Request, set_id: str):
+    return templates.TemplateResponse(request, "master_set.html", {})
+
+
+@app.get("/api/sets/{set_id}/master")
+def api_master_set(set_id: str):
+    result = get_master_set(set_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="set not found")
+    return result
 
 
 @app.get("/api/sync-status")

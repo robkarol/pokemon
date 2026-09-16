@@ -70,6 +70,17 @@
     font-size: 0.9rem;
   }
   #search { min-width: 220px; flex: 1 1 220px; }
+  #master-set-link {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.85rem;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  #master-set-link:hover { border-color: var(--accent); color: var(--accent); }
   .owned-toggle {
     display: flex;
     align-items: center;
@@ -157,6 +168,18 @@
   .card.write-error .card-img-wrap {
     outline: 2px solid #ef4444;
     outline-offset: -2px;
+  }
+  .variant-indicator {
+    position: absolute;
+    bottom: 0.4rem;
+    right: 0.4rem;
+    background: rgba(20,21,26,0.8);
+    border: 1px solid #a78bfa;
+    color: #a78bfa;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
   }
   .add-btn {
     position: absolute;
@@ -343,9 +366,16 @@
   <input id="search" type="search" placeholder="Search card name…">
   <select id="filter-supertype"><option value="">All card types</option></select>
   <select id="filter-set"><option value="">All sets</option></select>
+  <a id="master-set-link" href="#" target="_blank" rel="noopener" hidden>📋 Master set</a>
   <select id="filter-rarity"><option value="">All rarities</option></select>
   <select id="filter-type"><option value="">All elemental types</option></select>
   <select id="filter-language"><option value="">All languages</option></select>
+  <select id="filter-has-variant">
+    <option value="">Any print variant</option>
+    <option value="reverse_holo">Has reverse holo</option>
+    <option value="holo">Has holo</option>
+    <option value="first_edition">Has 1st edition</option>
+  </select>
   <select id="sort-field">
     <option value="set">Sort: Set</option>
     <option value="name">Sort: Name</option>
@@ -401,7 +431,7 @@
 
 <script>
 const state = {
-  search: "", set: "", rarity: "", supertype: "", type: "", language: "en", owned: false,
+  search: "", set: "", rarity: "", supertype: "", type: "", language: "en", hasVariant: "", owned: false,
   sort: "set", order: "asc", page: 1,
 };
 let pages = 1;
@@ -413,6 +443,8 @@ let currentIndex = -1;
 
 const LANGUAGE_LABELS = { en: "English", ja: "Japanese", th: "Thai" };
 const languageLabel = code => LANGUAGE_LABELS[code] || code;
+const VARIANT_LABELS = { normal: "Normal", holo: "Holo", reverse_holo: "Reverse Holo", first_edition: "1st Edition", promo: "Promo" };
+const variantLabel = code => VARIANT_LABELS[code] || code;
 
 const grid = document.getElementById("grid");
 const statusLine = document.getElementById("status-line");
@@ -453,6 +485,7 @@ function cardEl(card, index) {
   const el = document.createElement("div");
   el.className = "card";
   const img = card.image_filename ? `/images/${card.image_filename}` : "";
+  const hasReverseHolo = safeParseList(card.variants).includes("reverse_holo");
   el.innerHTML = `
     <div class="card-img-wrap">
       <img loading="lazy" src="${img}" alt="${card.name}">
@@ -460,6 +493,7 @@ function cardEl(card, index) {
         <span class="owned-badge normal" hidden></span>
         <span class="owned-badge reverse-holo" hidden></span>
       </div>
+      ${hasReverseHolo ? '<span class="variant-indicator" title="Also printed as Reverse Holo">✦ RH</span>' : ""}
       <button class="add-btn" type="button" title="Add one (normal) to collection">+</button>
     </div>
     <div class="meta">
@@ -595,6 +629,7 @@ function renderLightbox(card) {
 
   const types = safeParseList(card.types);
   const subtypes = safeParseList(card.subtypes);
+  const variants = safeParseList(card.variants);
   const rows = [
     ["Card #", card.number],
     ["Pokédex #", card.pokedex_number],
@@ -604,6 +639,7 @@ function renderLightbox(card) {
     ["Types", types.join(", ")],
     ["HP", card.hp],
     ["Rarity", card.rarity],
+    ["Print Variants", variants.map(variantLabel).join(", ")],
     ["Artist", card.artist],
   ].filter(([, value]) => value);
 
@@ -663,7 +699,7 @@ async function loadMore() {
   const params = new URLSearchParams({
     search: state.search, set: state.set, rarity: state.rarity,
     supertype: state.supertype, type: state.type, language: state.language,
-    owned: state.owned, sort: state.sort, order: state.order,
+    has_variant: state.hasVariant, owned: state.owned, sort: state.sort, order: state.order,
     page: state.page, page_size: 60,
   });
   const res = await fetch(`/api/cards?${params}`);
@@ -694,12 +730,23 @@ document.getElementById("search").addEventListener("input", debounce(e => {
 
 for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
                           ["filter-supertype", "supertype"], ["filter-type", "type"],
-                          ["filter-language", "language"],
+                          ["filter-language", "language"], ["filter-has-variant", "hasVariant"],
                           ["sort-field", "sort"], ["sort-order", "order"]]) {
   document.getElementById(id).addEventListener("change", e => {
     state[key] = e.target.value;
+    if (key === "set") updateMasterSetLink();
     resetAndLoad();
   });
+}
+
+function updateMasterSetLink() {
+  const link = document.getElementById("master-set-link");
+  if (state.set) {
+    link.href = `/master/${encodeURIComponent(state.set)}`;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
 }
 
 document.getElementById("filter-owned").addEventListener("change", e => {
@@ -771,6 +818,7 @@ document.getElementById("sync-tcgdex-btn").addEventListener("click", async () =>
 });
 
 loadFacets();
+updateMasterSetLink();
 resetAndLoad();
 pollSyncStatus();
 setInterval(pollSyncStatus, 4000);
