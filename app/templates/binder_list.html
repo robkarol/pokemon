@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My Binders</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14151a;
+    --panel: #1d1f27;
+    --border: #2c2f3a;
+    --text: #e8e9ee;
+    --muted: #8b8fa3;
+    --accent: #ffcb05;
+    --accent-text: #14151a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .back-link {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  .back-link:hover { color: var(--accent); }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0;
+    white-space: nowrap;
+  }
+  h1 .accent { color: var(--accent); }
+  #new-binder-form {
+    display: flex;
+    gap: 0.5rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  #new-binder-name {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.7rem;
+    font-size: 0.9rem;
+    min-width: 240px;
+    flex: 1 1 240px;
+    max-width: 400px;
+  }
+  #new-binder-form button {
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #new-binder-form button:disabled { opacity: 0.5; cursor: default; }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.2rem;
+    padding: 1.5rem;
+    max-width: 1100px;
+  }
+  .binder-cover {
+    position: relative;
+    background: linear-gradient(135deg, #2a2c38, #1d1f27);
+    border: 1px solid var(--border);
+    border-left: 10px solid #3a3d4d;
+    border-radius: 4px 10px 10px 4px;
+    padding: 1.4rem 1.2rem;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    text-decoration: none;
+    color: var(--text);
+  }
+  .binder-cover:hover {
+    transform: translateY(-3px) rotate(-0.5deg);
+    box-shadow: 0 10px 22px rgba(0,0,0,0.45);
+    border-left-color: var(--accent);
+  }
+  .binder-cover .name {
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+  .binder-cover .meta {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 0.4rem;
+  }
+  .binder-cover .delete-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    width: 1.8rem;
+    height: 1.8rem;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(20,21,26,0.7);
+    color: var(--muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .binder-cover .delete-btn:hover { border-color: #ef4444; color: #ef4444; }
+  #status-line {
+    padding: 1.5rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <a class="back-link" href="/cards">&larr; Gallery</a>
+  <h1>My <span class="accent">Binders</span></h1>
+</header>
+
+<form id="new-binder-form">
+  <input id="new-binder-name" type="text" placeholder="New binder name…" maxlength="100" required>
+  <button type="submit">+ Create Binder</button>
+</form>
+
+<div id="grid"></div>
+<div id="status-line"></div>
+
+<script>
+const grid = document.getElementById("grid");
+const statusLine = document.getElementById("status-line");
+
+function binderCoverEl(binder) {
+  const a = document.createElement("a");
+  a.className = "binder-cover";
+  a.href = `/binder/${binder.id}`;
+  const totalSlots = binder.page_count * 9;
+  a.innerHTML = `
+    <button class="delete-btn" type="button" title="Delete binder">&times;</button>
+    <div>
+      <div class="name"></div>
+      <div class="meta">${binder.page_count} page${binder.page_count === 1 ? "" : "s"} &middot; ${binder.filled_count} / ${totalSlots} filled</div>
+    </div>
+  `;
+  a.querySelector(".name").textContent = binder.name;
+  a.querySelector(".delete-btn").addEventListener("click", async e => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete "${binder.name}"? This can't be undone.`)) return;
+    const res = await fetch(`/api/binders/${binder.id}`, { method: "DELETE" });
+    if (res.ok) a.remove();
+  });
+  return a;
+}
+
+async function load() {
+  const res = await fetch("/api/binders");
+  const binders = await res.json();
+  grid.innerHTML = "";
+  binders.forEach(b => grid.appendChild(binderCoverEl(b)));
+  statusLine.textContent = binders.length ? "" : "No binders yet — create one above.";
+}
+
+document.getElementById("new-binder-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = document.getElementById("new-binder-name");
+  const name = input.value.trim();
+  if (!name) return;
+  const submitBtn = e.target.querySelector("button");
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/binders?name=${encodeURIComponent(name)}`, { method: "POST" });
+    if (res.ok) {
+      input.value = "";
+      await load();
+    }
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -40,6 +40,12 @@
     white-space: nowrap;
   }
   h1 .accent { color: var(--accent); }
+  .back-link {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  .back-link:hover { color: var(--accent); }
   #sync-banner {
     font-size: 0.85rem;
     color: var(--muted);
@@ -353,6 +359,7 @@
 
 <header>
   <h1>Poke<span class="accent">mon</span> Card Gallery</h1>
+  <a class="back-link" href="/binder">📁 My Binders</a>
   <div id="sync-banner"></div>
 </header>
 

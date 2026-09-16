@@ -98,6 +98,23 @@ def init_db():
             error TEXT,
             synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS binders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            page_count INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS binder_slots (
+            binder_id INTEGER NOT NULL REFERENCES binders(id),
+            page_number INTEGER NOT NULL,
+            slot_index INTEGER NOT NULL,
+            card_id TEXT NOT NULL REFERENCES cards(id),
+            variant TEXT NOT NULL DEFAULT 'normal',
+            PRIMARY KEY (binder_id, page_number, slot_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_binder_slots_binder ON binder_slots(binder_id);
     """)
     conn.commit()
 
@@ -382,5 +399,155 @@ def collection_summary() -> dict:
             "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies FROM collection"
         ).fetchone()
         return dict(row)
+    finally:
+        conn.close()
+
+
+def list_owned_cards(search: str = "") -> list[dict]:
+    """Owned (card, variant) pairs for the binder card picker — one row per
+    variant so a card owned as both normal and reverse holo shows twice."""
+    conn = get_connection()
+    try:
+        clauses = ["collection.quantity > 0"]
+        params: list = []
+        if search:
+            clauses.append("cards.name LIKE ? COLLATE NOCASE")
+            params.append(f"%{search}%")
+        where = "WHERE " + " AND ".join(clauses)
+        rows = conn.execute(
+            f"""
+            SELECT cards.id, cards.name, cards.image_filename, cards.set_name, cards.number,
+                   cards.rarity, collection.variant, collection.quantity
+            FROM collection JOIN cards ON cards.id = collection.card_id
+            {where}
+            ORDER BY cards.name COLLATE NOCASE, collection.variant
+            """,
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Binders: a virtual card binder is a named grid of pages, each with a fixed
+# number of pockets. Pockets only get a row here once a card is placed in
+# them (empty pockets are implicit — the UI just knows page_count * SLOTS_PER_PAGE).
+# ---------------------------------------------------------------------------
+
+SLOTS_PER_PAGE = 9  # standard 3x3 "9-pocket" binder page
+
+
+def list_binders() -> list[dict]:
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT b.id, b.name, b.page_count, b.created_at, COUNT(bs.card_id) AS filled_count
+            FROM binders b LEFT JOIN binder_slots bs ON bs.binder_id = b.id
+            GROUP BY b.id
+            ORDER BY b.created_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def create_binder(name: str) -> dict:
+    conn = get_connection()
+    try:
+        cursor = conn.execute("INSERT INTO binders (name) VALUES (?)", (name,))
+        conn.commit()
+        return {"id": cursor.lastrowid, "name": name, "page_count": 1, "filled_count": 0}
+    finally:
+        conn.close()
+
+
+def delete_binder(binder_id: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM binder_slots WHERE binder_id = ?", (binder_id,))
+        conn.execute("DELETE FROM binders WHERE id = ?", (binder_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_binder(binder_id: int) -> Optional[dict]:
+    conn = get_connection()
+    try:
+        binder = conn.execute("SELECT * FROM binders WHERE id = ?", (binder_id,)).fetchone()
+        if not binder:
+            return None
+        rows = conn.execute(
+            """
+            SELECT bs.page_number, bs.slot_index, bs.variant, c.id AS card_id, c.name,
+                   c.image_filename, c.set_name, c.number, c.rarity
+            FROM binder_slots bs JOIN cards c ON c.id = bs.card_id
+            WHERE bs.binder_id = ?
+            """,
+            (binder_id,),
+        ).fetchall()
+        slots = {f"{r['page_number']}:{r['slot_index']}": dict(r) for r in rows}
+        return {"binder": dict(binder), "slots": slots}
+    finally:
+        conn.close()
+
+
+def add_binder_page(binder_id: int) -> int:
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE binders SET page_count = page_count + 1 WHERE id = ?", (binder_id,))
+        conn.commit()
+        row = conn.execute("SELECT page_count FROM binders WHERE id = ?", (binder_id,)).fetchone()
+        return row["page_count"] if row else 0
+    finally:
+        conn.close()
+
+
+def remove_last_binder_page(binder_id: int) -> dict:
+    """Removes the last page (and any cards placed in it). Refuses to go below 1 page."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT page_count FROM binders WHERE id = ?", (binder_id,)).fetchone()
+        if not row:
+            return {"removed": False, "reason": "binder not found"}
+        if row["page_count"] <= 1:
+            return {"removed": False, "reason": "a binder must have at least one page"}
+        last_page = row["page_count"]
+        conn.execute(
+            "DELETE FROM binder_slots WHERE binder_id = ? AND page_number = ?", (binder_id, last_page)
+        )
+        conn.execute("UPDATE binders SET page_count = page_count - 1 WHERE id = ?", (binder_id,))
+        conn.commit()
+        return {"removed": True, "page_count": last_page - 1}
+    finally:
+        conn.close()
+
+
+def set_binder_slot(binder_id: int, page: int, index: int, card_id: str, variant: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO binder_slots (binder_id, page_number, slot_index, card_id, variant)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(binder_id, page_number, slot_index)
+                DO UPDATE SET card_id = excluded.card_id, variant = excluded.variant
+            """,
+            (binder_id, page, index, card_id, variant),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_binder_slot(binder_id: int, page: int, index: int) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "DELETE FROM binder_slots WHERE binder_id = ? AND page_number = ? AND slot_index = ?",
+            (binder_id, page, index),
+        )
+        conn.commit()
     finally:
         conn.close()
