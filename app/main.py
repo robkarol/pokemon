@@ -12,9 +12,9 @@ from fastapi.templating import Jinja2Templates
 
 from app.database import (
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
-    get_facets, get_master_set, has_data, init_db, list_binders, list_owned_cards,
-    query_cards, remove_last_binder_page, set_binder_slot, set_collection_quantity,
-    collection_summary,
+    get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
+    list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
+    set_collection_quantity, collection_summary,
 )
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
@@ -153,8 +153,27 @@ def api_remove_collection(card_id: str, variant: str = Query("normal", pattern="
 
 
 @app.get("/api/collection/cards")
-def api_owned_cards(search: str = ""):
-    return list_owned_cards(search.strip())
+def api_owned_cards(
+    search: str = "",
+    set_id: str = Query("", alias="set"),
+    rarity: str = "",
+    supertype: str = "",
+    type: str = "",
+    language: str = "",
+):
+    return list_owned_cards(
+        search=search.strip(),
+        set_id=set_id,
+        rarity=rarity,
+        supertype=supertype,
+        card_type=type,
+        language=language,
+    )
+
+
+@app.get("/api/collection/facets")
+def api_owned_facets():
+    return get_owned_facets()
 
 
 @app.get("/binder")

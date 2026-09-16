@@ -250,10 +250,7 @@
     position: absolute;
     inset: 0;
     border-radius: 9px;
-    background:
-      radial-gradient(circle at 50% 50%, transparent 0 22%, var(--accent) 22% 24%, transparent 24%),
-      repeating-linear-gradient(45deg, #20222c, #20222c 10px, #262837 10px, #262837 20px);
-    border: 3px solid var(--accent);
+    background: #1a1c25 url("https://images.pokemontcg.io/card-back.png") center / cover no-repeat;
     box-shadow: 0 10px 20px rgba(0,0,0,0.5);
   }
   .deck-card:nth-child(1) { transform: translate(5px, 7px) rotate(3deg); }
@@ -313,6 +310,23 @@
     padding: 0.7rem 0.9rem;
     font-size: 0.9rem;
   }
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.55rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .filter-row select {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.3rem 0.35rem;
+    font-size: 0.74rem;
+  }
   #picker-list {
     overflow-y: auto;
     padding: 0.4rem;
@@ -353,10 +367,7 @@
 
 <div class="toolbar">
   <span id="page-indicator"></span>
-  <span class="hint">Drag the page edge to flip</span>
-  <span style="flex:1"></span>
-  <button id="add-page" type="button">+ Add Page</button>
-  <button id="remove-page" type="button">&minus; Remove Last Page</button>
+  <span class="hint">Drag the page edge to flip — new pages appear as you fill them</span>
 </div>
 
 <div class="workspace">
@@ -393,6 +404,12 @@
           <button id="cancel-placing" type="button">Cancel</button>
         </div>
         <input id="picker-search" type="search" placeholder="Search your collection…">
+        <div class="filter-row">
+          <select id="filter-supertype"><option value="">All card types</option></select>
+          <select id="filter-set"><option value="">All sets</option></select>
+          <select id="filter-rarity"><option value="">All rarities</option></select>
+          <select id="filter-element"><option value="">All elements</option></select>
+        </div>
         <div id="picker-list"></div>
       </div>
     </div>
@@ -409,6 +426,7 @@ let binderData = null;    // { binder: {...}, slots: { "page:index": {...} } }
 let spreadIndex = 0;      // 0 = [null, 1]; k>=1 = [2k, 2k+1]
 let selectedCard = null;  // the owned-card row chosen from the deck list, waiting for a pocket
 let ownedCards = [];
+const cardFilters = { set: "", rarity: "", supertype: "", type: "" };
 
 function safeParseList(value) {
   if (!value) return [];
@@ -444,6 +462,7 @@ async function loadBinder() {
   if (spreadIndex > maxSpread) spreadIndex = maxSpread;
   renderSpread();
   refreshDeckCount();
+  loadOwnedFacets();
 }
 
 function pocketEl(pageNum, index) {
@@ -473,7 +492,6 @@ function pocketEl(pageNum, index) {
     });
   } else {
     el.className = "pocket empty" + (selectedCard ? " placeable" : "");
-    el.textContent = "+";
     el.addEventListener("click", () => {
       if (selectedCard) {
         placeSelectedCard(pageNum, index);
@@ -506,7 +524,6 @@ function renderSpread() {
     ? `Pages ${leftNum}–${Math.min(rightNum, pageCount)} of ${pageCount}`
     : `Page 1 of ${pageCount}`;
   document.getElementById("page-indicator").textContent = label;
-  document.getElementById("remove-page").disabled = pageCount <= 1;
 
   document.getElementById("backward-handle").style.display = spreadIndex > 0 ? "flex" : "none";
   document.getElementById("forward-handle").style.display = spreadIndex < maxSpread ? "flex" : "none";
@@ -514,6 +531,8 @@ function renderSpread() {
   // clear any leftover drag transforms
   document.getElementById("left-page-wrap").style.transform = "";
   document.getElementById("right-page-wrap").style.transform = "";
+
+  ensureBufferPage();
 }
 
 // --- drag-to-flip ---
@@ -595,32 +614,29 @@ function setupDrag(handleEl, direction) {
 setupDrag(document.getElementById("forward-handle"), "forward");
 setupDrag(document.getElementById("backward-handle"), "backward");
 
-document.getElementById("add-page").addEventListener("click", async () => {
+// A page is only worth having if it (or the one before it) holds cards, so
+// growth is automatic and bounded: whenever the spread currently in view is
+// both the last one AND has a card on it, one more blank page is created
+// so there's always somewhere to flip to next. An empty last spread gets
+// no such buffer, which is what keeps forward flipping from an empty page
+// disabled — there's nothing beyond it yet.
+function currentSpreadHasCards(k) {
+  const [l, r] = pagesForSpread(k);
+  return Object.keys(binderData.slots).some(key => {
+    const p = Number(key.split(":")[0]);
+    return p === l || p === r;
+  });
+}
+
+async function ensureBufferPage() {
+  const maxSpread = totalSpreads(binderData.binder.page_count) - 1;
+  if (spreadIndex !== maxSpread || !currentSpreadHasCards(spreadIndex)) return;
   const res = await fetch(`/api/binders/${binderId}/pages`, { method: "POST" });
+  if (!res.ok) return;
   const data = await res.json();
   binderData.binder.page_count = data.page_count;
-  spreadIndex = totalSpreads(data.page_count) - 1;
   renderSpread();
-});
-
-document.getElementById("remove-page").addEventListener("click", async () => {
-  const pageCount = binderData.binder.page_count;
-  const hasCards = Object.keys(binderData.slots).some(key => key.startsWith(`${pageCount}:`));
-  if (hasCards && !confirm(`Page ${pageCount} has cards in it. Remove it and its cards anyway?`)) return;
-  const res = await fetch(`/api/binders/${binderId}/pages/last`, { method: "DELETE" });
-  const data = await res.json();
-  if (data.removed) {
-    Object.keys(binderData.slots).forEach(key => {
-      if (key.startsWith(`${pageCount}:`)) delete binderData.slots[key];
-    });
-    binderData.binder.page_count = data.page_count;
-    const maxSpread = totalSpreads(data.page_count) - 1;
-    if (spreadIndex > maxSpread) spreadIndex = maxSpread;
-    renderSpread();
-    refreshDeckCount();
-    refreshPickerIfOpen();
-  }
-});
+}
 
 // --- persistent deck panel: click to expand, click a card, then click a pocket ---
 document.getElementById("deck-header").addEventListener("click", () => {
@@ -660,9 +676,31 @@ async function refreshDeckCount() {
 }
 
 async function loadOwnedCards(search) {
-  const res = await fetch(`/api/collection/cards?search=${encodeURIComponent(search)}`);
+  const params = new URLSearchParams({ search, ...cardFilters });
+  const res = await fetch(`/api/collection/cards?${params}`);
   ownedCards = await res.json();
   renderPickerList();
+}
+
+async function loadOwnedFacets() {
+  const res = await fetch(`/api/collection/facets`);
+  const data = await res.json();
+  document.getElementById("filter-set").innerHTML = '<option value="">All sets</option>' +
+    data.sets.map(s => `<option value="${s.id}">${s.name}</option>`).join("");
+  document.getElementById("filter-rarity").innerHTML = '<option value="">All rarities</option>' +
+    data.rarities.map(r => `<option value="${r}">${r}</option>`).join("");
+  document.getElementById("filter-supertype").innerHTML = '<option value="">All card types</option>' +
+    data.supertypes.map(s => `<option value="${s}">${s}</option>`).join("");
+  document.getElementById("filter-element").innerHTML = '<option value="">All elements</option>' +
+    data.types.map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
+                          ["filter-supertype", "supertype"], ["filter-element", "type"]]) {
+  document.getElementById(id).addEventListener("change", e => {
+    cardFilters[key] = e.target.value;
+    loadOwnedCards(document.getElementById("picker-search").value.trim());
+  });
 }
 
 function refreshPickerIfOpen() {

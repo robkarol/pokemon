@@ -251,6 +251,57 @@ def get_facets() -> dict:
         conn.close()
 
 
+def get_owned_facets() -> dict:
+    """Facet values scoped to the collection, for the binder picker's
+    filters — no point offering a set/rarity/type the user doesn't own."""
+    conn = get_connection()
+    try:
+        base = "FROM collection JOIN cards ON cards.id = collection.card_id"
+        sets = conn.execute(f"""
+            SELECT DISTINCT cards.set_id AS id, cards.set_name AS name
+            {base}
+            WHERE cards.set_id IS NOT NULL
+            ORDER BY cards.set_name COLLATE NOCASE
+        """).fetchall()
+        rarities = conn.execute(f"""
+            SELECT DISTINCT cards.rarity AS rarity {base}
+            WHERE cards.rarity IS NOT NULL AND cards.rarity != ''
+            ORDER BY cards.rarity
+        """).fetchall()
+        supertypes = conn.execute(f"""
+            SELECT DISTINCT cards.supertype AS supertype {base}
+            WHERE cards.supertype IS NOT NULL AND cards.supertype != ''
+            ORDER BY cards.supertype
+        """).fetchall()
+        languages = conn.execute(f"""
+            SELECT DISTINCT cards.language AS language {base}
+            WHERE cards.language IS NOT NULL AND cards.language != ''
+            ORDER BY cards.language
+        """).fetchall()
+        type_rows = conn.execute(f"""
+            SELECT DISTINCT cards.types AS types {base}
+            WHERE cards.types IS NOT NULL AND cards.types != '[]'
+        """).fetchall()
+
+        types = set()
+        for row in type_rows:
+            try:
+                for t in json.loads(row["types"]):
+                    types.add(t)
+            except (ValueError, TypeError):
+                continue
+
+        return {
+            "sets": [dict(r) for r in sets],
+            "rarities": [r["rarity"] for r in rarities],
+            "supertypes": [r["supertype"] for r in supertypes],
+            "languages": [r["language"] for r in languages],
+            "types": sorted(types),
+        }
+    finally:
+        conn.close()
+
+
 def query_cards(
     search: str = "",
     set_id: str = "",
@@ -403,7 +454,14 @@ def collection_summary() -> dict:
         conn.close()
 
 
-def list_owned_cards(search: str = "") -> list[dict]:
+def list_owned_cards(
+    search: str = "",
+    set_id: str = "",
+    rarity: str = "",
+    supertype: str = "",
+    card_type: str = "",
+    language: str = "",
+) -> list[dict]:
     """Owned (card, variant) pairs still free to place in a binder. A copy
     already sitting in any binder slot (any binder, not just the current
     one — you only have the one physical card) counts against the owned
@@ -415,6 +473,21 @@ def list_owned_cards(search: str = "") -> list[dict]:
         if search:
             clauses.append("cards.name LIKE ? COLLATE NOCASE")
             params.append(f"%{search}%")
+        if set_id:
+            clauses.append("cards.set_id = ?")
+            params.append(set_id)
+        if rarity:
+            clauses.append("cards.rarity = ?")
+            params.append(rarity)
+        if supertype:
+            clauses.append("cards.supertype = ?")
+            params.append(supertype)
+        if card_type:
+            clauses.append("cards.types LIKE ?")
+            params.append(f'%"{card_type}"%')
+        if language:
+            clauses.append("cards.language = ?")
+            params.append(language)
         where = "WHERE " + " AND ".join(clauses)
         rows = conn.execute(
             f"""
