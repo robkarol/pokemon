@@ -89,11 +89,19 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS collection (
+            user_id TEXT NOT NULL DEFAULT '',
             card_id TEXT NOT NULL REFERENCES cards(id),
             variant TEXT NOT NULL DEFAULT 'normal',
             quantity INTEGER NOT NULL DEFAULT 1,
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (card_id, variant)
+            PRIMARY KEY (user_id, card_id, variant)
+        );
+
+        CREATE TABLE IF NOT EXISTS wishlist (
+            user_id TEXT NOT NULL,
+            card_id TEXT NOT NULL REFERENCES cards(id),
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, card_id)
         );
 
         CREATE TABLE IF NOT EXISTS sync_log (
@@ -107,6 +115,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS binders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT '',
             name TEXT NOT NULL,
             color TEXT NOT NULL DEFAULT '#ffcb05',
             page_count INTEGER NOT NULL DEFAULT 1,
@@ -162,7 +171,35 @@ def init_db():
         """)
         conn.commit()
 
+    # Migration: accounts. Rows that predate them get user_id '' ("unowned")
+    # and are handed to a real account later via claim_legacy_data().
+    # The collection PK must now include user_id, which SQLite can only do
+    # by rebuilding the table.
+    collection_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection)").fetchall()}
+    if "user_id" not in collection_cols:
+        conn.executescript("""
+            ALTER TABLE collection RENAME TO collection_old;
+            CREATE TABLE collection (
+                user_id TEXT NOT NULL DEFAULT '',
+                card_id TEXT NOT NULL REFERENCES cards(id),
+                variant TEXT NOT NULL DEFAULT 'normal',
+                quantity INTEGER NOT NULL DEFAULT 1,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, card_id, variant)
+            );
+            INSERT INTO collection (user_id, card_id, variant, quantity, added_at)
+                SELECT '', card_id, variant, quantity, added_at FROM collection_old;
+            DROP TABLE collection_old;
+        """)
+        conn.commit()
+    binder_cols = {row[1] for row in conn.execute("PRAGMA table_info(binders)").fetchall()}
+    if "user_id" not in binder_cols:
+        conn.execute("ALTER TABLE binders ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+
     conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_binders_user    ON binders(user_id);
+        CREATE INDEX IF NOT EXISTS idx_wishlist_user   ON wishlist(user_id);
         CREATE INDEX IF NOT EXISTS idx_cards_name      ON cards(name COLLATE NOCASE);
         CREATE INDEX IF NOT EXISTS idx_cards_set       ON cards(set_id);
         CREATE INDEX IF NOT EXISTS idx_cards_rarity    ON cards(rarity);
@@ -263,37 +300,38 @@ def get_facets() -> dict:
         conn.close()
 
 
-def get_owned_facets() -> dict:
-    """Facet values scoped to the collection, for the binder picker's
-    filters — no point offering a set/rarity/type the user doesn't own."""
+def get_owned_facets(user_id: str) -> dict:
+    """Facet values scoped to one user's collection, for the binder picker's
+    filters — no point offering a set/rarity/type they don't own."""
     conn = get_connection()
     try:
         base = "FROM collection JOIN cards ON cards.id = collection.card_id"
+        scope = "collection.user_id = ?"
         sets = conn.execute(f"""
             SELECT DISTINCT cards.set_id AS id, cards.set_name AS name
             {base}
-            WHERE cards.set_id IS NOT NULL
+            WHERE {scope} AND cards.set_id IS NOT NULL
             ORDER BY cards.set_name COLLATE NOCASE
-        """).fetchall()
+        """, (user_id,)).fetchall()
         rarities = conn.execute(f"""
             SELECT DISTINCT cards.rarity AS rarity {base}
-            WHERE cards.rarity IS NOT NULL AND cards.rarity != ''
+            WHERE {scope} AND cards.rarity IS NOT NULL AND cards.rarity != ''
             ORDER BY cards.rarity
-        """).fetchall()
+        """, (user_id,)).fetchall()
         supertypes = conn.execute(f"""
             SELECT DISTINCT cards.supertype AS supertype {base}
-            WHERE cards.supertype IS NOT NULL AND cards.supertype != ''
+            WHERE {scope} AND cards.supertype IS NOT NULL AND cards.supertype != ''
             ORDER BY cards.supertype
-        """).fetchall()
+        """, (user_id,)).fetchall()
         languages = conn.execute(f"""
             SELECT DISTINCT cards.language AS language {base}
-            WHERE cards.language IS NOT NULL AND cards.language != ''
+            WHERE {scope} AND cards.language IS NOT NULL AND cards.language != ''
             ORDER BY cards.language
-        """).fetchall()
+        """, (user_id,)).fetchall()
         type_rows = conn.execute(f"""
             SELECT DISTINCT cards.types AS types {base}
-            WHERE cards.types IS NOT NULL AND cards.types != '[]'
-        """).fetchall()
+            WHERE {scope} AND cards.types IS NOT NULL AND cards.types != '[]'
+        """, (user_id,)).fetchall()
 
         types = set()
         for row in type_rows:
@@ -314,10 +352,10 @@ def get_owned_facets() -> dict:
         conn.close()
 
 
-def _attach_owned_breakdown(conn: sqlite3.Connection, rows: list) -> list[dict]:
-    """Merge each card's per-variant owned quantity in as owned_by_variant,
+def _attach_owned_breakdown(conn: sqlite3.Connection, user_id: str, rows: list) -> list[dict]:
+    """Merge this user's per-variant owned quantity in as owned_by_variant,
     plus owned_quantity as their sum — however many distinct variants a
-    card actually has (not capped at "normal" and "reverse_holo")."""
+    card actually has — and a `wishlisted` flag."""
     items = [dict(r) for r in rows]
     if not items:
         return items
@@ -326,21 +364,30 @@ def _attach_owned_breakdown(conn: sqlite3.Connection, rows: list) -> list[dict]:
     collection_rows = conn.execute(
         f"""
         SELECT card_id, variant, SUM(quantity) AS qty FROM collection
-        WHERE card_id IN ({placeholders}) GROUP BY card_id, variant
+        WHERE user_id = ? AND card_id IN ({placeholders}) GROUP BY card_id, variant
         """,
-        card_ids,
+        [user_id, *card_ids],
     ).fetchall()
     by_card: dict[str, dict[str, int]] = {}
     for r in collection_rows:
         by_card.setdefault(r["card_id"], {})[r["variant"]] = r["qty"]
+    wished = {
+        r["card_id"]
+        for r in conn.execute(
+            f"SELECT card_id FROM wishlist WHERE user_id = ? AND card_id IN ({placeholders})",
+            [user_id, *card_ids],
+        ).fetchall()
+    }
     for item in items:
         breakdown = by_card.get(item["id"], {})
         item["owned_by_variant"] = breakdown
         item["owned_quantity"] = sum(breakdown.values())
+        item["wishlisted"] = item["id"] in wished
     return items
 
 
 def query_cards(
+    user_id: str,
     search: str = "",
     set_id: str = "",
     rarity: str = "",
@@ -349,6 +396,7 @@ def query_cards(
     language: str = "",
     has_variant: str = "",
     owned: bool = False,
+    wishlist: bool = False,
     sort: str = "set",
     order: str = "asc",
     page: int = 1,
@@ -381,11 +429,17 @@ def query_cards(
             clauses.append("cards.variants LIKE ?")
             params.append(f'%"{has_variant}"%')
 
+        if owned:
+            clauses.append(
+                "cards.id IN (SELECT card_id FROM collection WHERE user_id = ? "
+                "GROUP BY card_id HAVING SUM(quantity) > 0)"
+            )
+            params.append(user_id)
+        if wishlist:
+            clauses.append("cards.id IN (SELECT card_id FROM wishlist WHERE user_id = ?)")
+            params.append(user_id)
+
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        joined = "FROM cards LEFT JOIN collection ON collection.card_id = cards.id"
-        group_having = "GROUP BY cards.id" + (
-            " HAVING COALESCE(SUM(collection.quantity), 0) > 0" if owned else ""
-        )
 
         columns = SORT_COLUMNS.get(sort, SORT_COLUMNS["set"])
         direction = "DESC" if order == "desc" else "ASC"
@@ -396,7 +450,7 @@ def query_cards(
         order_clause = "ORDER BY " + ", ".join(order_terms)
 
         total = conn.execute(
-            f"SELECT COUNT(*) AS c FROM (SELECT cards.id {joined} {where} {group_having}) sub",
+            f"SELECT COUNT(*) AS c FROM cards {where}",
             params,
         ).fetchone()["c"]
 
@@ -407,13 +461,13 @@ def query_cards(
         rows = conn.execute(
             f"""
             SELECT cards.*
-            {joined} {where} {group_having} {order_clause} LIMIT ? OFFSET ?
+            FROM cards {where} {order_clause} LIMIT ? OFFSET ?
             """,
             params + [page_size, offset],
         ).fetchall()
 
         return {
-            "items": _attach_owned_breakdown(conn, rows),
+            "items": _attach_owned_breakdown(conn, user_id, rows),
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -423,7 +477,7 @@ def query_cards(
         conn.close()
 
 
-def get_master_set(set_id: str) -> Optional[dict]:
+def get_master_set(user_id: str, set_id: str) -> Optional[dict]:
     """Every card in one set, ordered by number, with its variants and
     current collection state — the checklist view for chasing a full
     master set (every card in every print variant it actually exists in)."""
@@ -446,27 +500,30 @@ def get_master_set(set_id: str) -> Optional[dict]:
             (set_id,),
         ).fetchall()
 
-        return {"set": dict(meta), "cards": _attach_owned_breakdown(conn, rows)}
+        return {"set": dict(meta), "cards": _attach_owned_breakdown(conn, user_id, rows)}
     finally:
         conn.close()
 
 
-def set_collection_quantity(card_id: str, variant: str, quantity: int) -> int:
-    """Set (or clear, if quantity <= 0) how many copies of a card/variant are owned. Returns the stored quantity."""
+def set_collection_quantity(user_id: str, card_id: str, variant: str, quantity: int) -> int:
+    """Set (or clear, if quantity <= 0) how many copies of a card/variant the user owns. Returns the stored quantity."""
     if not _VARIANT_SLUG_RE.match(variant):
         raise ValueError(f"invalid variant {variant!r}")
     conn = get_connection()
     try:
         if quantity <= 0:
-            conn.execute("DELETE FROM collection WHERE card_id = ? AND variant = ?", (card_id, variant))
+            conn.execute(
+                "DELETE FROM collection WHERE user_id = ? AND card_id = ? AND variant = ?",
+                (user_id, card_id, variant),
+            )
             conn.commit()
             return 0
         conn.execute(
             """
-            INSERT INTO collection (card_id, variant, quantity) VALUES (?, ?, ?)
-            ON CONFLICT(card_id, variant) DO UPDATE SET quantity = excluded.quantity
+            INSERT INTO collection (user_id, card_id, variant, quantity) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, card_id, variant) DO UPDATE SET quantity = excluded.quantity
             """,
-            (card_id, variant, quantity),
+            (user_id, card_id, variant, quantity),
         )
         conn.commit()
         return quantity
@@ -474,11 +531,75 @@ def set_collection_quantity(card_id: str, variant: str, quantity: int) -> int:
         conn.close()
 
 
-def collection_summary() -> dict:
+def set_wishlisted(user_id: str, card_id: str, wanted: bool) -> bool:
+    """Add/remove a card from the user's wishlist. Returns False if the card doesn't exist."""
+    conn = get_connection()
+    try:
+        if wanted:
+            if not conn.execute("SELECT 1 FROM cards WHERE id = ?", (card_id,)).fetchone():
+                return False
+            conn.execute(
+                "INSERT OR IGNORE INTO wishlist (user_id, card_id) VALUES (?, ?)", (user_id, card_id)
+            )
+        else:
+            conn.execute("DELETE FROM wishlist WHERE user_id = ? AND card_id = ?", (user_id, card_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def legacy_summary() -> dict:
+    """Rows from before accounts existed (user_id ''), waiting to be claimed."""
+    conn = get_connection()
+    try:
+        return {
+            "collection_rows": conn.execute(
+                "SELECT COUNT(*) AS c FROM collection WHERE user_id = ''"
+            ).fetchone()["c"],
+            "binders": conn.execute(
+                "SELECT COUNT(*) AS c FROM binders WHERE user_id = ''"
+            ).fetchone()["c"],
+        }
+    finally:
+        conn.close()
+
+
+def claim_legacy_data(user_id: str) -> dict:
+    """Hand all pre-accounts collection rows and binders to one account.
+    Collection quantities are merged into anything the account already owns."""
+    if not user_id:
+        raise ValueError("user_id required")
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        moved = conn.execute("SELECT COUNT(*) AS c FROM collection WHERE user_id = ''").fetchone()["c"]
+        conn.execute(
+            """
+            INSERT INTO collection (user_id, card_id, variant, quantity, added_at)
+            SELECT ?, card_id, variant, quantity, added_at FROM collection WHERE user_id = ''
+            ON CONFLICT(user_id, card_id, variant) DO UPDATE SET quantity = quantity + excluded.quantity
+            """,
+            (user_id,),
+        )
+        conn.execute("DELETE FROM collection WHERE user_id = ''")
+        binders = conn.execute("UPDATE binders SET user_id = ? WHERE user_id = ''", (user_id,)).rowcount
+        conn.commit()
+        return {"collection_rows": moved, "binders": binders}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def collection_summary(user_id: str) -> dict:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies FROM collection"
+            "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies "
+            "FROM collection WHERE user_id = ?",
+            (user_id,),
         ).fetchone()
         return dict(row)
     finally:
@@ -486,6 +607,7 @@ def collection_summary() -> dict:
 
 
 def list_owned_cards(
+    user_id: str,
     search: str = "",
     set_id: str = "",
     rarity: str = "",
@@ -499,8 +621,8 @@ def list_owned_cards(
     quantity, so a card drops out of the picker once every copy has a home."""
     conn = get_connection()
     try:
-        clauses = ["(collection.quantity - COALESCE(placed.placed_count, 0)) > 0"]
-        params: list = []
+        clauses = ["collection.user_id = ?", "(collection.quantity - COALESCE(placed.placed_count, 0)) > 0"]
+        params: list = [user_id]
         if search:
             clauses.append("cards.name LIKE ? COLLATE NOCASE")
             params.append(f"%{search}%")
@@ -528,14 +650,15 @@ def list_owned_cards(
             FROM collection
             JOIN cards ON cards.id = collection.card_id
             LEFT JOIN (
-                SELECT card_id, variant, COUNT(*) AS placed_count
-                FROM binder_slots
-                GROUP BY card_id, variant
+                SELECT bs.card_id, bs.variant, COUNT(*) AS placed_count
+                FROM binder_slots bs JOIN binders b ON b.id = bs.binder_id
+                WHERE b.user_id = ?
+                GROUP BY bs.card_id, bs.variant
             ) AS placed ON placed.card_id = collection.card_id AND placed.variant = collection.variant
             {where}
             ORDER BY cards.name COLLATE NOCASE, collection.variant
             """,
-            params,
+            [user_id] + params,
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -567,38 +690,53 @@ BINDER_COLORS = (
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
-def list_binders() -> list[dict]:
+def binder_owned_by(user_id: str, binder_id: int) -> bool:
+    conn = get_connection()
+    try:
+        return conn.execute(
+            "SELECT 1 FROM binders WHERE id = ? AND user_id = ?", (binder_id, user_id)
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def list_binders(user_id: str) -> list[dict]:
     conn = get_connection()
     try:
         rows = conn.execute("""
             SELECT b.id, b.name, b.color, b.page_count, b.created_at, COUNT(bs.card_id) AS filled_count
             FROM binders b LEFT JOIN binder_slots bs ON bs.binder_id = b.id
+            WHERE b.user_id = ?
             GROUP BY b.id
             ORDER BY b.created_at DESC
-        """).fetchall()
+        """, (user_id,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def create_binder(name: str, color: str = BINDER_COLORS[0]) -> dict:
+def create_binder(user_id: str, name: str, color: str = BINDER_COLORS[0]) -> dict:
     if not _HEX_COLOR_RE.match(color):
         raise ValueError(f"invalid color {color!r}")
     conn = get_connection()
     try:
-        cursor = conn.execute("INSERT INTO binders (name, color) VALUES (?, ?)", (name, color))
+        cursor = conn.execute(
+            "INSERT INTO binders (user_id, name, color) VALUES (?, ?, ?)", (user_id, name, color)
+        )
         conn.commit()
         return {"id": cursor.lastrowid, "name": name, "color": color, "page_count": 1, "filled_count": 0}
     finally:
         conn.close()
 
 
-def update_binder(binder_id: int, name: Optional[str] = None, color: Optional[str] = None) -> Optional[dict]:
+def update_binder(user_id: str, binder_id: int, name: Optional[str] = None, color: Optional[str] = None) -> Optional[dict]:
     if color is not None and not _HEX_COLOR_RE.match(color):
         raise ValueError(f"invalid color {color!r}")
     conn = get_connection()
     try:
-        if not conn.execute("SELECT 1 FROM binders WHERE id = ?", (binder_id,)).fetchone():
+        if not conn.execute(
+            "SELECT 1 FROM binders WHERE id = ? AND user_id = ?", (binder_id, user_id)
+        ).fetchone():
             return None
         if name is not None:
             conn.execute("UPDATE binders SET name = ? WHERE id = ?", (name, binder_id))
@@ -618,9 +756,13 @@ def update_binder(binder_id: int, name: Optional[str] = None, color: Optional[st
         conn.close()
 
 
-def delete_binder(binder_id: int) -> None:
+def delete_binder(user_id: str, binder_id: int) -> None:
     conn = get_connection()
     try:
+        if not conn.execute(
+            "SELECT 1 FROM binders WHERE id = ? AND user_id = ?", (binder_id, user_id)
+        ).fetchone():
+            return
         conn.execute("DELETE FROM binder_slots WHERE binder_id = ?", (binder_id,))
         conn.execute("DELETE FROM binders WHERE id = ?", (binder_id,))
         conn.commit()
@@ -628,10 +770,12 @@ def delete_binder(binder_id: int) -> None:
         conn.close()
 
 
-def get_binder(binder_id: int) -> Optional[dict]:
+def get_binder(user_id: str, binder_id: int) -> Optional[dict]:
     conn = get_connection()
     try:
-        binder = conn.execute("SELECT * FROM binders WHERE id = ?", (binder_id,)).fetchone()
+        binder = conn.execute(
+            "SELECT * FROM binders WHERE id = ? AND user_id = ?", (binder_id, user_id)
+        ).fetchone()
         if not binder:
             return None
         rows = conn.execute(

@@ -4,14 +4,16 @@ SQLite metadata cache and a flat folder of downloaded card images.
 """
 import asyncio
 import logging
+import os
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Path as PathParam, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Query, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import (
+    binder_owned_by, claim_legacy_data, legacy_summary, set_wishlisted,
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
     get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
@@ -26,6 +28,42 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Accounts come from the Authentik forward-auth middleware in front of this
+# app: Traefik strips any client-supplied X-authentik-* headers and replaces
+# them with the outpost's verdict. That is the whole trust boundary — the
+# app must only be reachable through Traefik (a container on the same docker
+# network could forge these headers).
+ADMIN_GROUP = os.environ.get("POKEMON_ADMIN_GROUP", "authentik Admins")
+
+
+class Identity:
+    def __init__(self, user_id: str, name: str, groups: list[str]):
+        self.user_id = user_id
+        self.name = name
+        self.groups = groups
+
+    @property
+    def is_admin(self) -> bool:
+        return ADMIN_GROUP in self.groups
+
+
+def current_user(request: Request) -> Identity:
+    username = request.headers.get("x-authentik-username", "").strip()
+    if not username:
+        raise HTTPException(status_code=401, detail="not signed in")
+    name = request.headers.get("x-authentik-name", "").strip() or username
+    # Authentik joins group names with "|".
+    groups = [g for g in request.headers.get("x-authentik-groups", "").split("|") if g]
+    return Identity(username, name, groups)
+
+
+def owned_binder(binder_id: int, user: Identity = Depends(current_user)) -> int:
+    """404 (not 403) for someone else's binder, so ids can't be probed."""
+    if not binder_owned_by(user.user_id, binder_id):
+        raise HTTPException(status_code=404, detail="binder not found")
+    return binder_id
+
 
 app = FastAPI(title="Pokemon Card Gallery")
 templates = Jinja2Templates(directory="app/templates")
@@ -61,15 +99,18 @@ def api_cards(
     language: str = "",
     has_variant: str = "",
     owned: bool = False,
+    wishlist: bool = False,
     sort: str = "set",
     order: str = "asc",
     page: int = 1,
     page_size: int = 60,
+    user: Identity = Depends(current_user),
 ):
     # Plain `def`: FastAPI runs this in its worker threadpool instead of the
     # asyncio event loop, so a SQLite call that's briefly blocked behind the
     # background sync's writes doesn't stall every other request too.
     return query_cards(
+        user.user_id,
         search=search.strip(),
         set_id=set_id,
         rarity=rarity,
@@ -78,6 +119,7 @@ def api_cards(
         language=language,
         has_variant=has_variant,
         owned=owned,
+        wishlist=wishlist,
         sort=sort,
         order=order,
         page=page,
@@ -96,8 +138,8 @@ async def master_set_page(request: Request, set_id: str):
 
 
 @app.get("/api/sets/{set_id}/master")
-def api_master_set(set_id: str):
-    result = get_master_set(set_id)
+def api_master_set(set_id: str, user: Identity = Depends(current_user)):
+    result = get_master_set(user.user_id, set_id)
     if result is None:
         raise HTTPException(status_code=404, detail="set not found")
     return result
@@ -133,8 +175,41 @@ async def api_sync(source: str = "pokemontcg"):
 
 
 @app.get("/api/collection")
-def api_collection_summary():
-    return collection_summary()
+def api_collection_summary(user: Identity = Depends(current_user)):
+    return collection_summary(user.user_id)
+
+
+@app.get("/api/me")
+def api_me(user: Identity = Depends(current_user)):
+    legacy = legacy_summary() if user.is_admin else {"collection_rows": 0, "binders": 0}
+    return {
+        "user": user.user_id,
+        "name": user.name,
+        "is_admin": user.is_admin,
+        "legacy": legacy,
+    }
+
+
+@app.post("/api/legacy/claim")
+def api_claim_legacy(user: Identity = Depends(current_user)):
+    """Assign pre-accounts data (the single shared collection/binders from
+    before per-user separation) to the calling admin."""
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="admin only")
+    return claim_legacy_data(user.user_id)
+
+
+@app.put("/api/wishlist/{card_id}")
+def api_add_wishlist(card_id: str, user: Identity = Depends(current_user)):
+    if not set_wishlisted(user.user_id, card_id, True):
+        raise HTTPException(status_code=404, detail="card not found")
+    return {"card_id": card_id, "wishlisted": True}
+
+
+@app.delete("/api/wishlist/{card_id}")
+def api_remove_wishlist(card_id: str, user: Identity = Depends(current_user)):
+    set_wishlisted(user.user_id, card_id, False)
+    return {"card_id": card_id, "wishlisted": False}
 
 
 @app.put("/api/collection/{card_id}")
@@ -142,14 +217,19 @@ def api_set_collection(
     card_id: str,
     quantity: int = Query(..., ge=0, le=999),
     variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$"),
+    user: Identity = Depends(current_user),
 ):
-    stored = set_collection_quantity(card_id, variant, quantity)
+    stored = set_collection_quantity(user.user_id, card_id, variant, quantity)
     return {"card_id": card_id, "variant": variant, "quantity": stored}
 
 
 @app.delete("/api/collection/{card_id}")
-def api_remove_collection(card_id: str, variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$")):
-    set_collection_quantity(card_id, variant, 0)
+def api_remove_collection(
+    card_id: str,
+    variant: str = Query("normal", pattern="^[a-z][a-z0-9_]{0,39}$"),
+    user: Identity = Depends(current_user),
+):
+    set_collection_quantity(user.user_id, card_id, variant, 0)
     return {"card_id": card_id, "variant": variant, "quantity": 0}
 
 
@@ -161,8 +241,10 @@ def api_owned_cards(
     supertype: str = "",
     type: str = "",
     language: str = "",
+    user: Identity = Depends(current_user),
 ):
     return list_owned_cards(
+        user.user_id,
         search=search.strip(),
         set_id=set_id,
         rarity=rarity,
@@ -173,8 +255,8 @@ def api_owned_cards(
 
 
 @app.get("/api/collection/facets")
-def api_owned_facets():
-    return get_owned_facets()
+def api_owned_facets(user: Identity = Depends(current_user)):
+    return get_owned_facets(user.user_id)
 
 
 @app.get("/binder")
@@ -188,8 +270,8 @@ async def binder_view_page(request: Request, binder_id: int):
 
 
 @app.get("/api/binders")
-def api_list_binders():
-    return list_binders()
+def api_list_binders(user: Identity = Depends(current_user)):
+    return list_binders(user.user_id)
 
 
 @app.get("/api/binders/colors")
@@ -201,49 +283,52 @@ def api_binder_colors():
 def api_create_binder(
     name: str = Query(..., min_length=1, max_length=100),
     color: str = Query(BINDER_COLORS[0], pattern="^#[0-9a-fA-F]{6}$"),
+    user: Identity = Depends(current_user),
 ):
-    return create_binder(name.strip(), color)
+    return create_binder(user.user_id, name.strip(), color)
 
 
 @app.patch("/api/binders/{binder_id}")
 def api_update_binder(
-    binder_id: int,
+    binder_id: int = Depends(owned_binder),
     name: Optional[str] = Query(None, min_length=1, max_length=100),
     color: Optional[str] = Query(None, pattern="^#[0-9a-fA-F]{6}$"),
+    user: Identity = Depends(current_user),
 ):
-    result = update_binder(binder_id, name=name.strip() if name else None, color=color)
+    result = update_binder(user.user_id, binder_id, name=name.strip() if name else None, color=color)
     if result is None:
         raise HTTPException(status_code=404, detail="binder not found")
     return result
 
 
 @app.get("/api/binders/{binder_id}")
-def api_get_binder(binder_id: int):
-    result = get_binder(binder_id)
+def api_get_binder(binder_id: int = Depends(owned_binder), user: Identity = Depends(current_user)):
+    result = get_binder(user.user_id, binder_id)
     if result is None:
         raise HTTPException(status_code=404, detail="binder not found")
     return result
 
 
 @app.delete("/api/binders/{binder_id}")
-def api_delete_binder(binder_id: int):
-    delete_binder(binder_id)
+def api_delete_binder(binder_id: int = Depends(owned_binder), user: Identity = Depends(current_user)):
+    delete_binder(user.user_id, binder_id)
     return {"deleted": True}
 
 
 @app.post("/api/binders/{binder_id}/pages")
-def api_add_binder_page(binder_id: int):
+def api_add_binder_page(binder_id: int = Depends(owned_binder)):
     return {"page_count": add_binder_page(binder_id)}
 
 
 @app.delete("/api/binders/{binder_id}/pages/last")
-def api_remove_binder_page(binder_id: int):
+def api_remove_binder_page(binder_id: int = Depends(owned_binder)):
     return remove_last_binder_page(binder_id)
 
 
 @app.put("/api/binders/{binder_id}/slots/{page}/{index}")
 def api_set_binder_slot(
-    binder_id: int,
+    *,
+    binder_id: int = Depends(owned_binder),
     page: int,
     index: int = PathParam(..., ge=0, le=8),
     card_id: str = Query(...),
@@ -254,6 +339,11 @@ def api_set_binder_slot(
 
 
 @app.delete("/api/binders/{binder_id}/slots/{page}/{index}")
-def api_clear_binder_slot(binder_id: int, page: int, index: int = PathParam(..., ge=0, le=8)):
+def api_clear_binder_slot(
+    *,
+    binder_id: int = Depends(owned_binder),
+    page: int,
+    index: int = PathParam(..., ge=0, le=8),
+):
     clear_binder_slot(binder_id, page, index)
     return {"ok": True}

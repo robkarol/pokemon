@@ -171,6 +171,46 @@
     outline: 2px solid #ef4444;
     outline-offset: -2px;
   }
+  .wish-btn {
+    position: absolute;
+    bottom: 0.4rem;
+    right: 0.4rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: rgba(20,21,26,0.8);
+    color: var(--muted);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .wish-btn:hover { color: #ec4899; border-color: #ec4899; }
+  .wish-btn.on { color: #ec4899; border-color: #ec4899; background: rgba(236,72,153,0.2); }
+  .wish-btn.lb {
+    position: static;
+    width: auto;
+    height: auto;
+    border-radius: 999px;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.85rem;
+    margin-top: 0.6rem;
+  }
+  #me-line { color: var(--muted); font-size: 0.8rem; margin-left: auto; white-space: nowrap; }
+  #legacy-banner {
+    display: none;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 1.5rem;
+    background: rgba(255,203,5,0.12);
+    border-bottom: 1px solid var(--accent);
+    font-size: 0.9rem;
+  }
+  #legacy-banner.visible { display: flex; }
   .add-buttons {
     position: absolute;
     top: 0.4rem;
@@ -355,8 +395,14 @@
 <header>
   <h1>Poke<span class="accent">mon</span> Card Gallery</h1>
   <a class="back-link" href="/binder">📁 My Binders</a>
+  <span id="me-line"></span>
   <div id="sync-banner"></div>
 </header>
+
+<div id="legacy-banner">
+  <span id="legacy-text"></span>
+  <button type="button" id="legacy-claim">Claim it for my account</button>
+</div>
 
 <div class="sync-row">
   <button id="sync-en-btn" type="button">Resync English cards</button>
@@ -396,6 +442,10 @@
     <input type="checkbox" id="filter-owned">
     My collection
   </label>
+  <label class="owned-toggle">
+    <input type="checkbox" id="filter-wishlist">
+    Wishlist
+  </label>
 </div>
 
 <p id="result-count"></p>
@@ -415,6 +465,7 @@
       <h2 id="d-name"></h2>
       <div class="set-line" id="d-set-line"></div>
       <div id="lightbox-collection"></div>
+      <button type="button" id="lightbox-wish" class="wish-btn lb"></button>
       <dl id="d-meta"></dl>
     </div>
   </div>
@@ -422,7 +473,7 @@
 
 <script>
 const state = {
-  search: "", set: "", rarity: "", supertype: "", type: "", language: "en", hasVariant: "", owned: false,
+  search: "", set: "", rarity: "", supertype: "", type: "", language: "en", hasVariant: "", owned: false, wishlist: false,
   sort: "set", order: "asc", page: 1,
 };
 let pages = 1;
@@ -532,12 +583,58 @@ function cardEl(card, index) {
     });
     addButtons.appendChild(btn);
   });
+  const wishBtn = document.createElement("button");
+  wishBtn.type = "button";
+  wishBtn.className = "wish-btn";
+  wishBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    toggleWishlist(index);
+  });
+  el.querySelector(".card-img-wrap").appendChild(wishBtn);
   updateBadges(el, card);
   el.addEventListener("click", () => openLightboxAt(index));
   return el;
 }
 
+function paintWish(btn, card, long) {
+  btn.classList.toggle("on", !!card.wishlisted);
+  btn.textContent = long ? (card.wishlisted ? "♥ On wishlist" : "♡ Add to wishlist") : (card.wishlisted ? "♥" : "♡");
+  btn.title = card.wishlisted ? "Remove from wishlist" : "Add to wishlist";
+}
+
+function renderWish(index) {
+  const card = loadedCards[index];
+  const cardEl = grid.children[index];
+  if (cardEl) paintWish(cardEl.querySelector(".wish-btn"), card, false);
+  if (index === currentIndex) paintWish(document.getElementById("lightbox-wish"), card, true);
+}
+
+const wishChains = new Map();
+
+async function toggleWishlist(index) {
+  const card = loadedCards[index];
+  const want = !card.wishlisted;
+  card.wishlisted = want;
+  renderWish(index);
+  // Serialised per card so rapid toggles reach the server in order.
+  const prev = wishChains.get(card.id) || Promise.resolve();
+  const next = prev.then(async () => {
+    try {
+      const res = await fetch(`/api/wishlist/${encodeURIComponent(card.id)}`, { method: want ? "PUT" : "DELETE" });
+      return res.ok;
+    } catch { return false; }
+  });
+  wishChains.set(card.id, next);
+  if (!(await next)) {
+    card.wishlisted = !want;
+    renderWish(index);
+    const cardEl = grid.children[index];
+    if (cardEl) flashWriteError(cardEl);
+  }
+}
+
 function updateBadges(el, card) {
+  paintWish(el.querySelector(".wish-btn"), card, false);
   const wrap = el.querySelector(".badges");
   wrap.innerHTML = "";
   const owned = card.owned_by_variant || {};
@@ -673,6 +770,7 @@ function renderLightbox(card) {
   document.getElementById("d-set-line").textContent =
     [card.set_name, card.series].filter(Boolean).join(" · ") || "";
   renderQtyStepper(card);
+  paintWish(document.getElementById("lightbox-wish"), card, true);
 
   const types = safeParseList(card.types);
   const subtypes = safeParseList(card.subtypes);
@@ -746,7 +844,7 @@ async function loadMore() {
   const params = new URLSearchParams({
     search: state.search, set: state.set, rarity: state.rarity,
     supertype: state.supertype, type: state.type, language: state.language,
-    has_variant: state.hasVariant, owned: state.owned, sort: state.sort, order: state.order,
+    has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, sort: state.sort, order: state.order,
     page: state.page, page_size: 60,
   });
   const res = await fetch(`/api/cards?${params}`);
@@ -795,6 +893,39 @@ function updateMasterSetLink() {
     link.hidden = true;
   }
 }
+
+document.getElementById("lightbox-wish").addEventListener("click", () => {
+  if (currentIndex >= 0) toggleWishlist(currentIndex);
+});
+
+document.getElementById("filter-wishlist").addEventListener("change", e => {
+  state.wishlist = e.target.checked;
+  resetAndLoad();
+});
+
+async function loadMe() {
+  try {
+    const res = await fetch("/api/me");
+    if (!res.ok) return;
+    const me = await res.json();
+    document.getElementById("me-line").textContent = `Signed in as ${me.name}`;
+    const n = me.legacy.collection_rows + me.legacy.binders;
+    if (me.is_admin && n > 0) {
+      document.getElementById("legacy-text").textContent =
+        `${me.legacy.collection_rows} collection entries and ${me.legacy.binders} binders from before accounts existed are unclaimed.`;
+      document.getElementById("legacy-banner").classList.add("visible");
+    }
+  } catch {}
+}
+
+document.getElementById("legacy-claim").addEventListener("click", async () => {
+  const res = await fetch("/api/legacy/claim", { method: "POST" });
+  if (res.ok) {
+    document.getElementById("legacy-banner").classList.remove("visible");
+    resetAndLoad();
+  }
+});
+loadMe();
 
 document.getElementById("filter-owned").addEventListener("change", e => {
   state.owned = e.target.checked;
