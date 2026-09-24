@@ -171,8 +171,7 @@ def init_db():
         """)
         conn.commit()
 
-    # Migration: accounts. Rows that predate them get user_id '' ("unowned")
-    # and are handed to a real account later via claim_legacy_data().
+    # Migration: accounts. Rows that predate them get user_id ''.
     # The collection PK must now include user_id, which SQLite can only do
     # by rebuilding the table.
     collection_cols = {row[1] for row in conn.execute("PRAGMA table_info(collection)").fetchall()}
@@ -545,50 +544,6 @@ def set_wishlisted(user_id: str, card_id: str, wanted: bool) -> bool:
             conn.execute("DELETE FROM wishlist WHERE user_id = ? AND card_id = ?", (user_id, card_id))
         conn.commit()
         return True
-    finally:
-        conn.close()
-
-
-def legacy_summary() -> dict:
-    """Rows from before accounts existed (user_id ''), waiting to be claimed."""
-    conn = get_connection()
-    try:
-        return {
-            "collection_rows": conn.execute(
-                "SELECT COUNT(*) AS c FROM collection WHERE user_id = ''"
-            ).fetchone()["c"],
-            "binders": conn.execute(
-                "SELECT COUNT(*) AS c FROM binders WHERE user_id = ''"
-            ).fetchone()["c"],
-        }
-    finally:
-        conn.close()
-
-
-def claim_legacy_data(user_id: str) -> dict:
-    """Hand all pre-accounts collection rows and binders to one account.
-    Collection quantities are merged into anything the account already owns."""
-    if not user_id:
-        raise ValueError("user_id required")
-    conn = get_connection()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        moved = conn.execute("SELECT COUNT(*) AS c FROM collection WHERE user_id = ''").fetchone()["c"]
-        conn.execute(
-            """
-            INSERT INTO collection (user_id, card_id, variant, quantity, added_at)
-            SELECT ?, card_id, variant, quantity, added_at FROM collection WHERE user_id = ''
-            ON CONFLICT(user_id, card_id, variant) DO UPDATE SET quantity = quantity + excluded.quantity
-            """,
-            (user_id,),
-        )
-        conn.execute("DELETE FROM collection WHERE user_id = ''")
-        binders = conn.execute("UPDATE binders SET user_id = ? WHERE user_id = ''", (user_id,)).rowcount
-        conn.commit()
-        return {"collection_rows": moved, "binders": binders}
-    except Exception:
-        conn.rollback()
-        raise
     finally:
         conn.close()
 

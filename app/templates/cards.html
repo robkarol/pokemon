@@ -201,16 +201,6 @@
     margin-top: 0.6rem;
   }
   #me-line { color: var(--muted); font-size: 0.8rem; margin-left: auto; white-space: nowrap; }
-  #legacy-banner {
-    display: none;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.6rem 1.5rem;
-    background: rgba(255,203,5,0.12);
-    border-bottom: 1px solid var(--accent);
-    font-size: 0.9rem;
-  }
-  #legacy-banner.visible { display: flex; }
   .add-buttons {
     position: absolute;
     top: 0.4rem;
@@ -398,11 +388,6 @@
   <span id="me-line"></span>
   <div id="sync-banner"></div>
 </header>
-
-<div id="legacy-banner">
-  <span id="legacy-text"></span>
-  <button type="button" id="legacy-claim">Claim it for my account</button>
-</div>
 
 <div class="sync-row">
   <button id="sync-en-btn" type="button">Resync English cards</button>
@@ -909,22 +894,9 @@ async function loadMe() {
     if (!res.ok) return;
     const me = await res.json();
     document.getElementById("me-line").textContent = `Signed in as ${me.name}`;
-    const n = me.legacy.collection_rows + me.legacy.binders;
-    if (me.is_admin && n > 0) {
-      document.getElementById("legacy-text").textContent =
-        `${me.legacy.collection_rows} collection entries and ${me.legacy.binders} binders from before accounts existed are unclaimed.`;
-      document.getElementById("legacy-banner").classList.add("visible");
-    }
   } catch {}
 }
 
-document.getElementById("legacy-claim").addEventListener("click", async () => {
-  const res = await fetch("/api/legacy/claim", { method: "POST" });
-  if (res.ok) {
-    document.getElementById("legacy-banner").classList.remove("visible");
-    resetAndLoad();
-  }
-});
 loadMe();
 
 document.getElementById("filter-owned").addEventListener("change", e => {

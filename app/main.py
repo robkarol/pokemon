@@ -4,7 +4,6 @@ SQLite metadata cache and a flat folder of downloaded card images.
 """
 import asyncio
 import logging
-import os
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Path as PathParam, Query, Request
@@ -13,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import (
-    binder_owned_by, claim_legacy_data, legacy_summary, set_wishlisted,
+    binder_owned_by, set_wishlisted,
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
     get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
@@ -34,18 +33,10 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 # them with the outpost's verdict. That is the whole trust boundary — the
 # app must only be reachable through Traefik (a container on the same docker
 # network could forge these headers).
-ADMIN_GROUP = os.environ.get("POKEMON_ADMIN_GROUP", "authentik Admins")
-
-
 class Identity:
-    def __init__(self, user_id: str, name: str, groups: list[str]):
+    def __init__(self, user_id: str, name: str):
         self.user_id = user_id
         self.name = name
-        self.groups = groups
-
-    @property
-    def is_admin(self) -> bool:
-        return ADMIN_GROUP in self.groups
 
 
 def current_user(request: Request) -> Identity:
@@ -53,9 +44,7 @@ def current_user(request: Request) -> Identity:
     if not username:
         raise HTTPException(status_code=401, detail="not signed in")
     name = request.headers.get("x-authentik-name", "").strip() or username
-    # Authentik joins group names with "|".
-    groups = [g for g in request.headers.get("x-authentik-groups", "").split("|") if g]
-    return Identity(username, name, groups)
+    return Identity(username, name)
 
 
 def owned_binder(binder_id: int, user: Identity = Depends(current_user)) -> int:
@@ -181,22 +170,7 @@ def api_collection_summary(user: Identity = Depends(current_user)):
 
 @app.get("/api/me")
 def api_me(user: Identity = Depends(current_user)):
-    legacy = legacy_summary() if user.is_admin else {"collection_rows": 0, "binders": 0}
-    return {
-        "user": user.user_id,
-        "name": user.name,
-        "is_admin": user.is_admin,
-        "legacy": legacy,
-    }
-
-
-@app.post("/api/legacy/claim")
-def api_claim_legacy(user: Identity = Depends(current_user)):
-    """Assign pre-accounts data (the single shared collection/binders from
-    before per-user separation) to the calling admin."""
-    if not user.is_admin:
-        raise HTTPException(status_code=403, detail="admin only")
-    return claim_legacy_data(user.user_id)
+    return {"user": user.user_id, "name": user.name}
 
 
 @app.put("/api/wishlist/{card_id}")
