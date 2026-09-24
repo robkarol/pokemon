@@ -392,6 +392,7 @@
 <div class="sync-row">
   <button id="sync-en-btn" type="button">Resync English cards</button>
   <button id="sync-tcgdex-btn" type="button">Add Japanese &amp; Thai cards</button>
+  <button id="sync-new-btn" type="button" title="Fetch only sets not in the database yet; existing sets are not touched">Check for new sets</button>
   <span id="sync-status-text"></span>
 </div>
 
@@ -913,6 +914,7 @@ async function pollSyncStatus() {
 
   enBtn.disabled = en.running;
   tcgdexBtn.disabled = tcgdex.running;
+  document.getElementById("sync-new-btn").disabled = en.running || tcgdex.running;
 
   const lines = [];
   let refreshNeeded = false;
@@ -921,10 +923,12 @@ async function pollSyncStatus() {
     pokemontcgWasRunning = true;
     const setProgress = en.total_sets
       ? ` (set ${en.sets_done}/${en.total_sets}${en.current_set ? ": " + en.current_set : ""})` : "";
-    lines.push(`Syncing English cards…${setProgress} ${en.cards_synced.toLocaleString()} cards, ${en.images_downloaded.toLocaleString()} images`);
+    lines.push(`${en.new_only ? "Checking for new English sets" : "Syncing English cards"}…${setProgress} ${en.cards_synced.toLocaleString()} cards, ${en.images_downloaded.toLocaleString()} images`);
   } else if (pokemontcgWasRunning) {
     pokemontcgWasRunning = false;
-    lines.push(en.last_error ? `English sync failed: ${en.last_error}` : "English sync complete");
+    lines.push(en.last_error ? `English sync failed: ${en.last_error}`
+      : en.new_only ? (en.total_sets ? `Added ${en.total_sets - en.sets_failed} new English set(s)` : "No new English sets")
+      : "English sync complete");
     refreshNeeded = true;
   } else if (!en.has_data) {
     lines.push("No English cards cached yet.");
@@ -935,10 +939,12 @@ async function pollSyncStatus() {
     const langPart = tcgdex.language ? `${languageLabel(tcgdex.language)}, ` : "";
     const setProgress = tcgdex.total_sets
       ? ` (${langPart}set ${tcgdex.sets_done}/${tcgdex.total_sets}${tcgdex.current_set ? ": " + tcgdex.current_set : ""})` : "";
-    lines.push(`Syncing Japanese/Thai cards…${setProgress} ${tcgdex.cards_synced.toLocaleString()} cards, ${tcgdex.images_downloaded.toLocaleString()} images`);
+    lines.push(`${tcgdex.new_only ? "Checking for new Japanese/Thai sets" : "Syncing Japanese/Thai cards"}…${setProgress} ${tcgdex.cards_synced.toLocaleString()} cards, ${tcgdex.images_downloaded.toLocaleString()} images`);
   } else if (tcgdexWasRunning) {
     tcgdexWasRunning = false;
-    lines.push(tcgdex.last_error ? `Japanese/Thai sync failed: ${tcgdex.last_error}` : "Japanese/Thai sync complete");
+    lines.push(tcgdex.last_error ? `Japanese/Thai sync failed: ${tcgdex.last_error}`
+      : tcgdex.new_only ? `Japanese/Thai new-set check complete (${tcgdex.cards_synced} cards added)`
+      : "Japanese/Thai sync complete");
     refreshNeeded = true;
   }
 
@@ -960,6 +966,10 @@ async function pollSyncStatus() {
 
 document.getElementById("sync-en-btn").addEventListener("click", async () => {
   await fetch("/api/sync?source=pokemontcg", { method: "POST" });
+  pollSyncStatus();
+});
+document.getElementById("sync-new-btn").addEventListener("click", async () => {
+  await fetch("/api/sync?source=new", { method: "POST" });
   pollSyncStatus();
 });
 document.getElementById("sync-tcgdex-btn").addEventListener("click", async () => {

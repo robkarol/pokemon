@@ -30,7 +30,7 @@ from typing import Optional
 
 import requests
 
-from app.database import get_connection, log_sync, upsert_cards
+from app.database import existing_set_keys, get_connection, log_sync, upsert_cards
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ CATEGORY_TO_SUPERTYPE = {
 
 _sync_status: dict = {
     "running": False,
+    "new_only": False,
     "phase": None,
     "language": None,
     "current_set": None,
@@ -213,8 +214,11 @@ def _sync_one_set(conn, pool: ThreadPoolExecutor, lang: str, set_brief: dict) ->
     return len(rows)
 
 
-def _sync_one_language(conn, pool: ThreadPoolExecutor, lang: str) -> None:
+def _sync_one_language(conn, pool: ThreadPoolExecutor, lang: str, new_only: bool = False) -> None:
     sets = _request_json(f"{API_BASE}/{lang}/sets") or []
+    if new_only:
+        known = existing_set_keys()
+        sets = [s for s in sets if (f"tcgdex-{lang}-{s['id']}", lang) not in known]
     _sync_status["total_sets"] = len(sets)
     _sync_status["sets_done"] = 0
     _sync_status["sets_failed"] = 0
@@ -231,15 +235,17 @@ def _sync_one_language(conn, pool: ThreadPoolExecutor, lang: str) -> None:
             _sync_status["sets_done"] += 1
 
 
-def sync_tcgdex_data(languages: Optional[list[str]] = None) -> dict:
+def sync_tcgdex_data(languages: Optional[list[str]] = None, new_only: bool = False) -> dict:
     """Walk every set for each language, upserting card metadata and
-    downloading any card art not already cached on disk."""
+    downloading any card art not already cached on disk. With new_only,
+    sets already in the database are skipped."""
     if _sync_status["running"]:
         return {"started": False, "message": "sync already running"}
 
     languages = languages or LANGUAGES
     _sync_status.update(
         running=True,
+        new_only=new_only,
         phase="starting",
         language=None,
         current_set=None,
@@ -258,7 +264,7 @@ def sync_tcgdex_data(languages: Optional[list[str]] = None) -> dict:
             for lang in languages:
                 _sync_status["language"] = lang
                 _sync_status["phase"] = f"syncing {lang}"
-                _sync_one_language(conn, pool, lang)
+                _sync_one_language(conn, pool, lang, new_only)
 
         _sync_status["last_synced"] = datetime.now(timezone.utc).isoformat()
         log_sync("success", _sync_status["cards_synced"], _sync_status["images_downloaded"])
@@ -281,5 +287,5 @@ def sync_tcgdex_data(languages: Optional[list[str]] = None) -> dict:
         conn.close()
 
 
-async def sync_tcgdex_data_async(languages: Optional[list[str]] = None) -> dict:
-    return await asyncio.to_thread(sync_tcgdex_data, languages)
+async def sync_tcgdex_data_async(languages: Optional[list[str]] = None, new_only: bool = False) -> dict:
+    return await asyncio.to_thread(sync_tcgdex_data, languages, new_only)

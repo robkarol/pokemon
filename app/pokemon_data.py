@@ -28,7 +28,7 @@ from typing import Optional
 
 import requests
 
-from app.database import get_connection, log_sync, upsert_cards
+from app.database import existing_set_keys, get_connection, log_sync, upsert_cards
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ REQUEST_DELAY = float(os.environ.get("POKEMONTCG_REQUEST_DELAY", _DEFAULT_DELAY)
 
 _sync_status: dict = {
     "running": False,
+    "new_only": False,
     "phase": None,
     "current_set": None,
     "sets_done": 0,
@@ -242,14 +243,17 @@ def _sync_one_set(conn, pool: ThreadPoolExecutor, set_info: dict) -> int:
     return len(rows)
 
 
-def sync_pokemon_data() -> dict:
+def sync_pokemon_data(new_only: bool = False) -> dict:
     """Walk every set in the Pokemon TCG API, upserting card metadata and
-    downloading any card art not already cached on disk."""
+    downloading any card art not already cached on disk. With new_only, sets
+    already in the database are skipped entirely (nothing existing is
+    touched) and only sets not seen before are fetched."""
     if _sync_status["running"]:
         return {"started": False, "message": "sync already running"}
 
     _sync_status.update(
         running=True,
+        new_only=new_only,
         phase="listing sets",
         current_set=None,
         sets_done=0,
@@ -264,6 +268,9 @@ def sync_pokemon_data() -> dict:
     conn = get_connection()
     try:
         sets = _fetch_all_sets()
+        if new_only:
+            known = existing_set_keys()
+            sets = [s for s in sets if (s["id"], "en") not in known]
         _sync_status["total_sets"] = len(sets)
         _sync_status["total_cards"] = sum(s.get("total") or 0 for s in sets)
         _sync_status["phase"] = "syncing cards"
@@ -303,5 +310,5 @@ def sync_pokemon_data() -> dict:
         conn.close()
 
 
-async def sync_pokemon_data_async() -> dict:
-    return await asyncio.to_thread(sync_pokemon_data)
+async def sync_pokemon_data_async(new_only: bool = False) -> dict:
+    return await asyncio.to_thread(sync_pokemon_data, new_only)

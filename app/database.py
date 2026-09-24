@@ -224,6 +224,18 @@ def has_data(language: Optional[str] = None) -> bool:
         conn.close()
 
 
+def existing_set_keys() -> set[tuple[str, str]]:
+    """(set_id, language) for every set that already has cards cached."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT set_id, language FROM cards WHERE set_id IS NOT NULL"
+        ).fetchall()
+        return {(r["set_id"], r["language"]) for r in rows}
+    finally:
+        conn.close()
+
+
 def upsert_cards(conn: sqlite3.Connection, rows: list[tuple]) -> None:
     """Insert/update cards from any sync source. Each row must match CARD_COLUMNS order."""
     conn.executemany(_UPSERT_CARD_SQL, rows)

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import (
-    binder_owned_by, set_wishlisted,
+    binder_owned_by, existing_set_keys, set_wishlisted,
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
     get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
@@ -20,7 +20,7 @@ from app.database import (
 )
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
-from app.tcgdex_data import sync_tcgdex_data_async
+from app.tcgdex_data import LANGUAGES as TCGDEX_LANGUAGES, sync_tcgdex_data_async
 from app.tcgdex_data import get_sync_status as get_tcgdex_sync_status
 
 logging.basicConfig(level=logging.INFO)
@@ -147,8 +147,28 @@ def api_sync_status():
     }
 
 
+async def _sync_new_sets() -> None:
+    """Fetch only sets not yet in the database — English from pokemontcg.io,
+    plus Japanese/Thai from TCGdex for whichever of those languages have
+    already been added. Existing sets are left untouched."""
+    try:
+        await sync_pokemon_data_async(new_only=True)
+        have = {lang for _, lang in existing_set_keys()}
+        langs = [lang for lang in TCGDEX_LANGUAGES if lang in have]
+        if langs:
+            await sync_tcgdex_data_async(langs, new_only=True)
+    except Exception:
+        logger.exception("New-set check failed")
+
+
 @app.post("/api/sync")
 async def api_sync(source: str = "pokemontcg"):
+    if source == "new":
+        if get_pokemontcg_sync_status()["running"] or get_tcgdex_sync_status()["running"]:
+            return {"started": False, "message": "sync already running"}
+        asyncio.create_task(_sync_new_sets())
+        return {"started": True}
+
     if source == "tcgdex":
         status = get_tcgdex_sync_status()
         if status["running"]:
