@@ -104,6 +104,14 @@ def init_db():
             PRIMARY KEY (user_id, card_id)
         );
 
+        -- Per-card print variants from TCGdex for English cards, kept apart
+        -- from cards.variants so a pokemontcg.io resync can re-merge them.
+        CREATE TABLE IF NOT EXISTS variant_hints (
+            card_id TEXT PRIMARY KEY REFERENCES cards(id),
+            variants TEXT NOT NULL,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS sync_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             status TEXT,
@@ -222,6 +230,32 @@ def has_data(language: Optional[str] = None) -> bool:
         return row["c"] > 0
     finally:
         conn.close()
+
+
+def merge_variants(price_based: list[str], hints: list[str]) -> list[str]:
+    """Combine pokemontcg.io's price-derived variants with TCGdex's flags.
+
+    Price keys are the better signal for normal vs holo (TCGdex marks e.g.
+    ex/V ultra rares as "normal"), but they are missing entirely for new sets
+    and often omit reverse holos. So: no price data -> trust TCGdex fully;
+    otherwise only take reverse holo and 1st Edition prints from it."""
+    if not price_based:
+        return sorted(set(hints))
+    extra = {v for v in hints if v == "reverse_holo" or v.startswith("first_edition")}
+    return sorted(set(price_based) | extra)
+
+
+def get_variant_hints(conn: sqlite3.Connection, card_ids: list[str]) -> dict[str, list[str]]:
+    hints: dict[str, list[str]] = {}
+    for i in range(0, len(card_ids), 500):
+        chunk = card_ids[i:i + 500]
+        rows = conn.execute(
+            f"SELECT card_id, variants FROM variant_hints WHERE card_id IN ({','.join('?' for _ in chunk)})",
+            chunk,
+        ).fetchall()
+        for r in rows:
+            hints[r["card_id"]] = json.loads(r["variants"])
+    return hints
 
 
 def existing_set_keys() -> set[tuple[str, str]]:

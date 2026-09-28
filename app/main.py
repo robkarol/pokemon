@@ -18,6 +18,8 @@ from app.database import (
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
     set_collection_quantity, update_binder, collection_summary, BINDER_COLORS,
 )
+from app.en_variants import backfill_en_variants_async
+from app.en_variants import get_status as get_variants_status
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
 from app.tcgdex_data import LANGUAGES as TCGDEX_LANGUAGES, sync_tcgdex_data_async
@@ -144,6 +146,7 @@ def api_sync_status():
     return {
         "pokemontcg": pokemontcg_status,
         "tcgdex": get_tcgdex_sync_status(),
+        "variants": get_variants_status(),
     }
 
 
@@ -152,7 +155,11 @@ async def _sync_new_sets() -> None:
     plus Japanese/Thai from TCGdex for whichever of those languages have
     already been added. Existing sets are left untouched."""
     try:
+        before = {set_id for set_id, lang in existing_set_keys() if lang == "en"}
         await sync_pokemon_data_async(new_only=True)
+        added = [set_id for set_id, lang in existing_set_keys() if lang == "en" and set_id not in before]
+        if added:
+            await backfill_en_variants_async(added)
         have = {lang for _, lang in existing_set_keys()}
         langs = [lang for lang in TCGDEX_LANGUAGES if lang in have]
         if langs:
@@ -176,11 +183,27 @@ async def api_sync(source: str = "pokemontcg"):
         asyncio.create_task(sync_tcgdex_data_async())
         return {"started": True}
 
+    if source == "variants":
+        if get_variants_status()["running"]:
+            return {"started": False, "message": "sync already running"}
+        asyncio.create_task(backfill_en_variants_async())
+        return {"started": True}
+
     status = get_pokemontcg_sync_status()
     if status["running"]:
         return {"started": False, "message": "sync already running"}
-    asyncio.create_task(sync_pokemon_data_async())
+    asyncio.create_task(_sync_english())
     return {"started": True}
+
+
+async def _sync_english() -> None:
+    """Full pokemontcg.io resync, then refresh TCGdex variant flags for every
+    English set (fills reverse holos the price data misses)."""
+    try:
+        await sync_pokemon_data_async()
+        await backfill_en_variants_async()
+    except Exception:
+        logger.exception("English sync failed")
 
 
 @app.get("/api/collection")

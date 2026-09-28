@@ -28,7 +28,9 @@ from typing import Optional
 
 import requests
 
-from app.database import existing_set_keys, get_connection, log_sync, upsert_cards
+from app.database import (
+    existing_set_keys, get_connection, get_variant_hints, log_sync, merge_variants, upsert_cards,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +185,7 @@ def _variants_from_card(card: dict) -> list[str]:
     return sorted(variants)
 
 
-def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
+def _card_to_row(card: dict, image_filename: Optional[str], hints: Optional[list[str]] = None) -> tuple:
     images = card.get("images") or {}
     image_url = images.get("large") or images.get("small")
     card_set = card.get("set") or {}
@@ -211,7 +213,7 @@ def _card_to_row(card: dict, image_filename: Optional[str]) -> tuple:
         card.get("artist"),
         dex_numbers[0] if dex_numbers else None,
         "en",
-        json.dumps(_variants_from_card(card)),
+        json.dumps(merge_variants(_variants_from_card(card), hints or [])),
         image_url,
         image_filename,
     )
@@ -238,7 +240,8 @@ def _sync_one_set(conn, pool: ThreadPoolExecutor, set_info: dict) -> int:
         except Exception as exc:
             logger.warning(f"Image download failed for {card['id']}: {exc}")
 
-    rows = [_card_to_row(card, filenames.get(card["id"])) for card in cards]
+    hints = get_variant_hints(conn, [card["id"] for card in cards])
+    rows = [_card_to_row(card, filenames.get(card["id"]), hints.get(card["id"])) for card in cards]
     upsert_cards(conn, rows)
     return len(rows)
 

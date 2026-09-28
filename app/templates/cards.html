@@ -466,6 +466,7 @@ let pages = 1;
 let loading = false;
 let pokemontcgWasRunning = false;
 let tcgdexWasRunning = false;
+let variantsWasRunning = false;
 let loadedCards = [];
 let currentIndex = -1;
 
@@ -512,13 +513,28 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+let allSets = [];
+
+// The set dropdown only lists sets in the selected language (all sets when
+// "All languages" is chosen). A selected set from another language is cleared.
+function renderSetOptions() {
+  const setSel = document.getElementById("filter-set");
+  const sets = state.language ? allSets.filter(s => s.language === state.language) : allSets;
+  setSel.innerHTML = '<option value="">All sets</option>' +
+    sets.map(s => `<option value="${s.id}">${s.name} (${s.card_count})</option>`).join("");
+  if (state.set && !sets.some(s => s.id === state.set)) {
+    state.set = "";
+    updateMasterSetLink();
+  }
+  setSel.value = state.set;
+}
+
 async function loadFacets() {
   const res = await fetch("/api/facets");
   const data = await res.json();
 
-  const setSel = document.getElementById("filter-set");
-  setSel.innerHTML = '<option value="">All sets</option>' +
-    data.sets.map(s => `<option value="${s.id}">${s.name} (${s.card_count})</option>`).join("");
+  allSets = data.sets;
+  renderSetOptions();
 
   const raritySel = document.getElementById("filter-rarity");
   raritySel.innerHTML = '<option value="">All rarities</option>' +
@@ -551,6 +567,7 @@ function cardEl(card, index) {
     <div class="meta">
       <div class="name">${card.name}</div>
       <div class="sub">${card.set_name || ""} · #${card.number || "?"}</div>
+      ${card.pokedex_number != null ? `<div class="sub">Pokédex #${String(card.pokedex_number).padStart(4, "0")}</div>` : ""}
     </div>
   `;
   const addButtons = el.querySelector(".add-buttons");
@@ -866,6 +883,7 @@ for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
   document.getElementById(id).addEventListener("change", e => {
     state[key] = e.target.value;
     if (key === "set") updateMasterSetLink();
+    if (key === "language") renderSetOptions();
     resetAndLoad();
   });
 }
@@ -907,14 +925,14 @@ document.getElementById("filter-owned").addEventListener("change", e => {
 
 async function pollSyncStatus() {
   const res = await fetch("/api/sync-status");
-  const { pokemontcg: en, tcgdex } = await res.json();
+  const { pokemontcg: en, tcgdex, variants } = await res.json();
   const banner = document.getElementById("sync-banner");
   const enBtn = document.getElementById("sync-en-btn");
   const tcgdexBtn = document.getElementById("sync-tcgdex-btn");
 
-  enBtn.disabled = en.running;
   tcgdexBtn.disabled = tcgdex.running;
-  document.getElementById("sync-new-btn").disabled = en.running || tcgdex.running;
+  document.getElementById("sync-new-btn").disabled = en.running || tcgdex.running || variants.running;
+  enBtn.disabled = en.running || variants.running;
 
   const lines = [];
   let refreshNeeded = false;
@@ -934,6 +952,18 @@ async function pollSyncStatus() {
     lines.push("No English cards cached yet.");
   }
 
+  if (variants.running) {
+    variantsWasRunning = true;
+    const setProgress = variants.total_sets
+      ? ` (set ${variants.sets_done}/${variants.total_sets}${variants.current_set ? ": " + variants.current_set : ""})` : "";
+    lines.push(`Updating English print variants from TCGdex…${setProgress} ${variants.cards_updated.toLocaleString()} cards updated`);
+  } else if (variantsWasRunning) {
+    variantsWasRunning = false;
+    lines.push(variants.last_error ? `Variant update failed: ${variants.last_error}`
+      : `Print variants updated (${variants.cards_updated.toLocaleString()} cards changed)`);
+    refreshNeeded = true;
+  }
+
   if (tcgdex.running) {
     tcgdexWasRunning = true;
     const langPart = tcgdex.language ? `${languageLabel(tcgdex.language)}, ` : "";
@@ -951,7 +981,7 @@ async function pollSyncStatus() {
   if (lines.length) {
     banner.innerHTML = lines.map(l => `<div>${l}</div>`).join("");
     banner.classList.add("visible");
-    if (refreshNeeded && !en.running && !tcgdex.running) {
+    if (refreshNeeded && !en.running && !tcgdex.running && !variants.running) {
       setTimeout(() => banner.classList.remove("visible"), 6000);
     }
   } else {
