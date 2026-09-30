@@ -500,7 +500,7 @@ def query_cards(
         ).fetchone()["c"]
 
         page = max(page, 1)
-        page_size = min(max(page_size, 1), 120)
+        page_size = min(max(page_size, 1), 200)
         offset = (page - 1) * page_size
 
         rows = conn.execute(
