@@ -19,6 +19,8 @@ from app.database import (
     set_collection_quantity, update_binder, collection_summary, BINDER_COLORS,
 )
 from app.en_variants import backfill_en_variants_async
+from app.image_backfill import backfill_images_async
+from app.image_backfill import get_status as get_images_status
 from app.en_variants import get_status as get_variants_status
 from app.pokemon_data import IMAGES_DIR, sync_pokemon_data_async
 from app.pokemon_data import get_sync_status as get_pokemontcg_sync_status
@@ -147,6 +149,7 @@ def api_sync_status():
         "pokemontcg": pokemontcg_status,
         "tcgdex": get_tcgdex_sync_status(),
         "variants": get_variants_status(),
+        "images": get_images_status(),
     }
 
 
@@ -164,6 +167,7 @@ async def _sync_new_sets() -> None:
         langs = [lang for lang in TCGDEX_LANGUAGES if lang in have]
         if langs:
             await sync_tcgdex_data_async(langs, new_only=True)
+            await backfill_images_async()
     except Exception:
         logger.exception("New-set check failed")
 
@@ -180,7 +184,13 @@ async def api_sync(source: str = "pokemontcg"):
         status = get_tcgdex_sync_status()
         if status["running"]:
             return {"started": False, "message": "sync already running"}
-        asyncio.create_task(sync_tcgdex_data_async())
+        asyncio.create_task(_sync_tcgdex())
+        return {"started": True}
+
+    if source == "images":
+        if get_images_status()["running"]:
+            return {"started": False, "message": "sync already running"}
+        asyncio.create_task(backfill_images_async())
         return {"started": True}
 
     if source == "variants":
@@ -194,6 +204,15 @@ async def api_sync(source: str = "pokemontcg"):
         return {"started": False, "message": "sync already running"}
     asyncio.create_task(_sync_english())
     return {"started": True}
+
+
+async def _sync_tcgdex() -> None:
+    """Japanese/Thai sync, then look for art TCGdex's API didn't link."""
+    try:
+        await sync_tcgdex_data_async()
+        await backfill_images_async()
+    except Exception:
+        logger.exception("TCGdex sync failed")
 
 
 async def _sync_english() -> None:

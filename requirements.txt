@@ -3,3 +3,4 @@ jinja2
 python-dotenv
 uvicorn
 requests
+Pillow

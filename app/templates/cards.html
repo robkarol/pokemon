@@ -467,6 +467,7 @@ let loading = false;
 let pokemontcgWasRunning = false;
 let tcgdexWasRunning = false;
 let variantsWasRunning = false;
+let imagesWasRunning = false;
 let loadedCards = [];
 let currentIndex = -1;
 
@@ -925,13 +926,13 @@ document.getElementById("filter-owned").addEventListener("change", e => {
 
 async function pollSyncStatus() {
   const res = await fetch("/api/sync-status");
-  const { pokemontcg: en, tcgdex, variants } = await res.json();
+  const { pokemontcg: en, tcgdex, variants, images } = await res.json();
   const banner = document.getElementById("sync-banner");
   const enBtn = document.getElementById("sync-en-btn");
   const tcgdexBtn = document.getElementById("sync-tcgdex-btn");
 
-  tcgdexBtn.disabled = tcgdex.running;
-  document.getElementById("sync-new-btn").disabled = en.running || tcgdex.running || variants.running;
+  document.getElementById("sync-new-btn").disabled = en.running || tcgdex.running || variants.running || images.running;
+  tcgdexBtn.disabled = tcgdex.running || images.running;
   enBtn.disabled = en.running || variants.running;
 
   const lines = [];
@@ -964,6 +965,18 @@ async function pollSyncStatus() {
     refreshNeeded = true;
   }
 
+  if (images.running) {
+    imagesWasRunning = true;
+    const setProgress = images.total_sets
+      ? ` (set ${images.sets_done}/${images.total_sets}${images.current_set ? ": " + images.current_set : ""})` : "";
+    lines.push(`Looking for missing Japanese/Thai card images…${setProgress} ${images.images_found.toLocaleString()} found`);
+  } else if (imagesWasRunning) {
+    imagesWasRunning = false;
+    lines.push(images.last_error ? `Image search failed: ${images.last_error}`
+      : `Image search complete (${images.images_found.toLocaleString()} images found)`);
+    refreshNeeded = true;
+  }
+
   if (tcgdex.running) {
     tcgdexWasRunning = true;
     const langPart = tcgdex.language ? `${languageLabel(tcgdex.language)}, ` : "";
@@ -981,7 +994,7 @@ async function pollSyncStatus() {
   if (lines.length) {
     banner.innerHTML = lines.map(l => `<div>${l}</div>`).join("");
     banner.classList.add("visible");
-    if (refreshNeeded && !en.running && !tcgdex.running && !variants.running) {
+    if (refreshNeeded && !en.running && !tcgdex.running && !variants.running && !images.running) {
       setTimeout(() => banner.classList.remove("visible"), 6000);
     }
   } else {
