@@ -204,6 +204,13 @@ def init_db():
         conn.execute("ALTER TABLE binders ADD COLUMN user_id TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
+    # Normalize rarities already stored (cheap: one pass over the distinct values).
+    for (rarity,) in conn.execute("SELECT DISTINCT rarity FROM cards WHERE rarity IS NOT NULL").fetchall():
+        fixed = normalize_rarity(rarity)
+        if fixed != rarity:
+            conn.execute("UPDATE cards SET rarity = ? WHERE rarity = ?", (fixed, rarity))
+    conn.commit()
+
     conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_binders_user    ON binders(user_id);
         CREATE INDEX IF NOT EXISTS idx_wishlist_user   ON wishlist(user_id);
@@ -270,8 +277,39 @@ def existing_set_keys() -> set[tuple[str, str]]:
         conn.close()
 
 
+# TCGdex spells rarities differently from pokemontcg.io ("Double rare" vs
+# "Double Rare", "Holo Rare V" vs "Rare Holo V", and a literal "None"),
+# which showed up as near-duplicate entries in the rarity filter.
+_RARITY_ALIASES = {
+    "None": None,
+    "": None,
+    "Holo Rare": "Rare Holo",
+    "Holo Rare V": "Rare Holo V",
+    "Holo Rare VMAX": "Rare Holo VMAX",
+    "Holo Rare VSTAR": "Rare Holo VSTAR",
+}
+
+
+def normalize_rarity(rarity: Optional[str]) -> Optional[str]:
+    if rarity is None:
+        return None
+    rarity = rarity.strip()
+    if rarity in _RARITY_ALIASES:
+        return _RARITY_ALIASES[rarity]
+    # Capitalize lowercase words, but keep "ex" (a distinct card mechanic
+    # from the older "EX") and all-caps tokens like "LEGEND" as they are.
+    return " ".join(w if w[0].isupper() or w == "ex" else w.capitalize() for w in rarity.split())
+
+
+_RARITY_INDEX = CARD_COLUMNS.index("rarity")
+
+
 def upsert_cards(conn: sqlite3.Connection, rows: list[tuple]) -> None:
     """Insert/update cards from any sync source. Each row must match CARD_COLUMNS order."""
+    rows = [
+        row[:_RARITY_INDEX] + (normalize_rarity(row[_RARITY_INDEX]),) + row[_RARITY_INDEX + 1:]
+        for row in rows
+    ]
     conn.executemany(_UPSERT_CARD_SQL, rows)
     conn.commit()
 
@@ -308,8 +346,9 @@ def get_facets() -> dict:
             ORDER BY set_release_date IS NULL, set_release_date DESC, set_name
         """).fetchall()
         rarities = conn.execute("""
-            SELECT DISTINCT rarity FROM cards
+            SELECT rarity, GROUP_CONCAT(DISTINCT language) AS languages FROM cards
             WHERE rarity IS NOT NULL AND rarity != ''
+            GROUP BY rarity
             ORDER BY rarity
         """).fetchall()
         supertypes = conn.execute("""
@@ -337,6 +376,7 @@ def get_facets() -> dict:
         return {
             "sets": [dict(r) for r in sets],
             "rarities": [r["rarity"] for r in rarities],
+            "rarity_languages": {r["rarity"]: r["languages"].split(",") for r in rarities},
             "supertypes": [r["supertype"] for r in supertypes],
             "languages": [r["language"] for r in languages],
             "types": sorted(types),
@@ -590,6 +630,26 @@ def set_wishlisted(user_id: str, card_id: str, wanted: bool) -> bool:
             conn.execute("DELETE FROM wishlist WHERE user_id = ? AND card_id = ?", (user_id, card_id))
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+def list_users() -> list[dict]:
+    """Everyone who has a collection, wishlist or binder, with collection size."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT u.user_id,
+                   (SELECT COUNT(DISTINCT card_id) FROM collection c WHERE c.user_id = u.user_id) AS distinct_cards,
+                   (SELECT COUNT(*) FROM wishlist w WHERE w.user_id = u.user_id) AS wishlist_count
+            FROM (
+                SELECT user_id FROM collection UNION SELECT user_id FROM wishlist
+                UNION SELECT user_id FROM binders
+            ) u
+            WHERE u.user_id != ''
+            ORDER BY u.user_id COLLATE NOCASE
+        """).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

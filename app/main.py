@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.database import (
-    binder_owned_by, existing_set_keys, set_wishlisted,
+    binder_owned_by, existing_set_keys, list_users, set_wishlisted,
     add_binder_page, clear_binder_slot, create_binder, delete_binder, get_binder,
     get_facets, get_master_set, get_owned_facets, has_data, init_db, list_binders,
     list_owned_cards, query_cards, remove_last_binder_page, set_binder_slot,
@@ -49,6 +49,16 @@ def current_user(request: Request) -> Identity:
         raise HTTPException(status_code=401, detail="not signed in")
     name = request.headers.get("x-authentik-name", "").strip() or username
     return Identity(username, name)
+
+
+def viewed_user_id(
+    user: str = Query("", max_length=150, description="view this user's collection (read-only)"),
+    me: Identity = Depends(current_user),
+) -> str:
+    """Whose collection/wishlist a read endpoint reports on: anyone's, when
+    ?user= is given, otherwise the caller's. Write endpoints never take this —
+    they always act on the signed-in user, so other collections are view-only."""
+    return user.strip() or me.user_id
 
 
 def owned_binder(binder_id: int, user: Identity = Depends(current_user)) -> int:
@@ -97,13 +107,13 @@ def api_cards(
     order: str = "asc",
     page: int = 1,
     page_size: int = 60,
-    user: Identity = Depends(current_user),
+    viewed: str = Depends(viewed_user_id),
 ):
     # Plain `def`: FastAPI runs this in its worker threadpool instead of the
     # asyncio event loop, so a SQLite call that's briefly blocked behind the
     # background sync's writes doesn't stall every other request too.
     return query_cards(
-        user.user_id,
+        viewed,
         search=search.strip(),
         set_id=set_id,
         rarity=rarity,
@@ -131,8 +141,8 @@ async def master_set_page(request: Request, set_id: str):
 
 
 @app.get("/api/sets/{set_id}/master")
-def api_master_set(set_id: str, user: Identity = Depends(current_user)):
-    result = get_master_set(user.user_id, set_id)
+def api_master_set(set_id: str, viewed: str = Depends(viewed_user_id)):
+    result = get_master_set(viewed, set_id)
     if result is None:
         raise HTTPException(status_code=404, detail="set not found")
     return result
@@ -226,8 +236,13 @@ async def _sync_english() -> None:
 
 
 @app.get("/api/collection")
-def api_collection_summary(user: Identity = Depends(current_user)):
-    return collection_summary(user.user_id)
+def api_collection_summary(viewed: str = Depends(viewed_user_id)):
+    return collection_summary(viewed)
+
+
+@app.get("/api/users")
+def api_users(user: Identity = Depends(current_user)):
+    return list_users()
 
 
 @app.get("/api/me")

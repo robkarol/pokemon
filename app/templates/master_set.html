@@ -148,6 +148,8 @@
 
 <script>
 const setId = decodeURIComponent(window.location.pathname.split("/").filter(Boolean).pop());
+// ?user=<name> shows someone else's progress, read-only.
+const viewUser = new URLSearchParams(location.search).get("user") || "";
 const list = document.getElementById("list");
 
 function safeParseList(value) {
@@ -187,7 +189,9 @@ function updateProgress(cards) {
     });
   });
   const pct = total ? Math.round((collected / total) * 100) : 0;
-  document.getElementById("progress-text").textContent = `${collected} / ${total} collected (${pct}%)`;
+  const who = document.getElementById("progress-text").dataset.who;
+  document.getElementById("progress-text").textContent =
+    `${who ? who + " has " : ""}${collected} / ${total} collected (${pct}%)${who ? " · view only" : ""}`;
   document.getElementById("progress-fill").style.width = `${pct}%`;
 }
 
@@ -234,7 +238,7 @@ function rowEl(card) {
   trackableSlots(card).forEach(slot => {
     const label = document.createElement("label");
     label.className = "slot" + (slot.owned > 0 ? " checked" : "");
-    label.innerHTML = `<input type="checkbox" ${slot.owned > 0 ? "checked" : ""}> ${slot.label}`;
+    label.innerHTML = `<input type="checkbox" ${slot.owned > 0 ? "checked" : ""} ${viewUser ? "disabled" : ""}> ${slot.label}`;
     const checkbox = label.querySelector("input");
     checkbox.addEventListener("change", async () => {
       const newQty = checkbox.checked ? 1 : 0;
@@ -261,7 +265,8 @@ function rowEl(card) {
 
 async function load() {
   const statusLine = document.getElementById("status-line");
-  const res = await fetch(`/api/sets/${encodeURIComponent(setId)}/master`);
+  const res = await fetch(`/api/sets/${encodeURIComponent(setId)}/master` +
+    (viewUser ? `?user=${encodeURIComponent(viewUser)}` : ""));
   if (!res.ok) {
     statusLine.textContent = "Set not found.";
     document.getElementById("set-name").textContent = "Not found";
@@ -275,6 +280,10 @@ async function load() {
   document.getElementById("set-sub").textContent =
     [data.set.series, data.set.release_date, langLabel].filter(Boolean).join(" · ");
   document.title = `${data.set.name || setId} — Master Set`;
+  if (viewUser) {
+    document.getElementById("progress-text").dataset.who = viewUser;
+    document.querySelector(".back-link").href = `/cards?user=${encodeURIComponent(viewUser)}`;
+  }
 
   list.innerHTML = "";
   cardsData.forEach(card => list.appendChild(rowEl(card)));

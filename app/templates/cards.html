@@ -200,6 +200,14 @@
     font-size: 0.85rem;
     margin-top: 0.6rem;
   }
+  #view-user-wrap { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+  #view-note { color: var(--accent); font-size: 0.8rem; }
+  /* Viewing someone else's collection: read-only, so hide every control that
+     writes; owned badges and filled hearts still show what they have. */
+  body.read-only .add-buttons,
+  body.read-only .qty-row button,
+  body.read-only .wish-btn:not(.on) { display: none; }
+  body.read-only .wish-btn { pointer-events: none; }
   #me-line { color: var(--muted); font-size: 0.8rem; margin-left: auto; white-space: nowrap; }
   .add-buttons {
     position: absolute;
@@ -424,14 +432,19 @@
     <option value="asc">Ascending</option>
     <option value="desc">Descending</option>
   </select>
+  <label id="view-user-wrap">
+    Collection:
+    <select id="view-user"><option value="">Mine</option></select>
+  </label>
   <label class="owned-toggle">
     <input type="checkbox" id="filter-owned">
-    My collection
+    <span id="owned-label">My collection</span>
   </label>
   <label class="owned-toggle">
     <input type="checkbox" id="filter-wishlist">
-    Wishlist
+    <span id="wishlist-label">Wishlist</span>
   </label>
+  <span id="view-note" hidden></span>
 </div>
 
 <p id="result-count"></p>
@@ -460,6 +473,7 @@
 <script>
 const state = {
   search: "", set: "", rarity: "", supertype: "", type: "", language: "en", hasVariant: "", owned: false, wishlist: false,
+  viewUser: new URLSearchParams(location.search).get("user") || "",
   sort: "set", order: "asc", page: 1,
 };
 let pages = 1;
@@ -515,6 +529,18 @@ function debounce(fn, ms) {
 }
 
 let allSets = [];
+let rarityLanguages = {};
+
+// Like sets: only offer rarities that exist in the selected language.
+function renderRarityOptions() {
+  const raritySel = document.getElementById("filter-rarity");
+  const rarities = Object.keys(rarityLanguages)
+    .filter(r => !state.language || rarityLanguages[r].includes(state.language));
+  raritySel.innerHTML = '<option value="">All rarities</option>' +
+    rarities.map(r => `<option value="${r}">${r}</option>`).join("");
+  if (state.rarity && !rarities.includes(state.rarity)) state.rarity = "";
+  raritySel.value = state.rarity;
+}
 
 // The set dropdown only lists sets in the selected language (all sets when
 // "All languages" is chosen). A selected set from another language is cleared.
@@ -537,9 +563,8 @@ async function loadFacets() {
   allSets = data.sets;
   renderSetOptions();
 
-  const raritySel = document.getElementById("filter-rarity");
-  raritySel.innerHTML = '<option value="">All rarities</option>' +
-    data.rarities.map(r => `<option value="${r}">${r}</option>`).join("");
+  rarityLanguages = data.rarity_languages || {};
+  renderRarityOptions();
 
   const supertypeSel = document.getElementById("filter-supertype");
   supertypeSel.innerHTML = '<option value="">All card types</option>' +
@@ -616,6 +641,7 @@ function renderWish(index) {
 const wishChains = new Map();
 
 async function toggleWishlist(index) {
+  if (readOnly()) return;
   const card = loadedCards[index];
   const want = !card.wishlisted;
   card.wishlisted = want;
@@ -692,6 +718,7 @@ async function putQuantity(cardId, variant, quantity) {
 }
 
 async function quickAdd(index, variant) {
+  if (readOnly()) return;
   const card = loadedCards[index];
   const owned = card.owned_by_variant || (card.owned_by_variant = {});
   const prevValue = owned[variant] || 0;
@@ -711,6 +738,7 @@ async function quickAdd(index, variant) {
 }
 
 async function adjustQuantity(variant, delta) {
+  if (readOnly()) return;
   if (currentIndex < 0) return;
   const card = loadedCards[currentIndex];
   const owned = card.owned_by_variant || (card.owned_by_variant = {});
@@ -850,7 +878,7 @@ async function loadMore() {
   const params = new URLSearchParams({
     search: state.search, set: state.set, rarity: state.rarity,
     supertype: state.supertype, type: state.type, language: state.language,
-    has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, sort: state.sort, order: state.order,
+    has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, user: state.viewUser, sort: state.sort, order: state.order,
     page: state.page, page_size: PAGE_SIZE,
   });
   const res = await fetch(`/api/cards?${params}`);
@@ -896,7 +924,7 @@ for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
   document.getElementById(id).addEventListener("change", e => {
     state[key] = e.target.value;
     if (key === "set") updateMasterSetLink();
-    if (key === "language") renderSetOptions();
+    if (key === "language") { renderSetOptions(); renderRarityOptions(); }
     resetAndLoad();
   });
 }
@@ -904,7 +932,8 @@ for (const [id, key] of [["filter-set", "set"], ["filter-rarity", "rarity"],
 function updateMasterSetLink() {
   const link = document.getElementById("master-set-link");
   if (state.set) {
-    link.href = `/master/${encodeURIComponent(state.set)}`;
+    link.href = `/master/${encodeURIComponent(state.set)}` +
+      (state.viewUser ? `?user=${encodeURIComponent(state.viewUser)}` : "");
     link.hidden = false;
   } else {
     link.hidden = true;
@@ -1032,6 +1061,51 @@ document.getElementById("sync-tcgdex-btn").addEventListener("click", async () =>
   pollSyncStatus();
 });
 
+function readOnly() { return !!state.viewUser; }
+
+function applyViewUser() {
+  const who = state.viewUser;
+  document.body.classList.toggle("read-only", !!who);
+  document.getElementById("owned-label").textContent = who ? `${who}'s collection` : "My collection";
+  document.getElementById("wishlist-label").textContent = who ? `${who}'s wishlist` : "Wishlist";
+  const note = document.getElementById("view-note");
+  note.hidden = !who;
+  note.textContent = who ? "Viewing only — you can't change someone else's cards" : "";
+  const url = new URL(location.href);
+  if (who) url.searchParams.set("user", who); else url.searchParams.delete("user");
+  history.replaceState(null, "", url);
+  updateMasterSetLink();
+}
+
+async function loadUsers() {
+  try {
+    const [usersRes, meRes] = await Promise.all([fetch("/api/users"), fetch("/api/me")]);
+    if (!usersRes.ok || !meRes.ok) return;
+    const users = await usersRes.json();
+    const me = (await meRes.json()).user;
+    const sel = document.getElementById("view-user");
+    const others = users.filter(u => u.user_id !== me);
+    // Option() rather than innerHTML: usernames are text, never markup.
+    sel.replaceChildren(new Option("Mine", ""),
+      ...others.map(u => new Option(`${u.user_id} (${u.distinct_cards} cards)`, u.user_id)));
+    if (state.viewUser === me) { state.viewUser = ""; applyViewUser(); resetAndLoad(); }
+    if (state.viewUser && !others.some(u => u.user_id === state.viewUser)) {
+      sel.add(new Option(state.viewUser, state.viewUser));
+    }
+    sel.value = state.viewUser;
+    document.getElementById("view-user-wrap").hidden = !others.length && !state.viewUser;
+  } catch {}
+}
+
+document.getElementById("view-user").addEventListener("change", e => {
+  state.viewUser = e.target.value;
+  applyViewUser();
+  closeLightbox();
+  resetAndLoad();
+});
+
+applyViewUser();
+loadUsers();
 loadFacets();
 updateMasterSetLink();
 resetAndLoad();
