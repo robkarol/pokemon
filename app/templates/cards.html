@@ -751,7 +751,7 @@ async function quickAdd(index, variant) {
   if (cardElNode) updateBadges(cardElNode, card);
 
   const ok = await queueQuantityWrite(card.id, variant, newValue);
-  if (ok) loadPokemonCount();
+  if (ok) refreshPokemonCount();
   if (!ok) {
     owned[variant] = prevValue;
     card.owned_quantity = Math.max(0, (card.owned_quantity || 0) - 1);
@@ -775,7 +775,7 @@ async function adjustQuantity(variant, delta) {
   if (cardElNode) updateBadges(cardElNode, card);
 
   const ok = await queueQuantityWrite(card.id, variant, newValue);
-  if (ok) loadPokemonCount();
+  if (ok) refreshPokemonCount();
   if (!ok) {
     owned[variant] = prevValue;
     card.owned_quantity = (card.owned_quantity || 0) - (newValue - prevValue);
@@ -901,30 +901,31 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") openLightboxAt(currentIndex + 1);
 });
 
-// "· 80 / 1,025 Pokémon": distinct Pokédex numbers in the whole collection
-// (not affected by the filters), for whoever's collection is on screen.
-async function loadPokemonCount() {
+// "· 48 / 1,022 unique Pokémon": distinct Pokédex numbers among the cards
+// matching the current filters (ignoring the collection/wishlist/compare
+// toggles), and how many of those are owned — so it lines up with the count.
+function renderPokemonCount(stats) {
   const el = document.getElementById("pokemon-count");
-  const summary = async who => {
-    const res = await fetch("/api/collection" + (who ? `?user=${encodeURIComponent(who)}` : ""));
-    return res.ok ? res.json() : null;
-  };
+  if (!stats) return;
+  const n = v => v.toLocaleString();
+  if (COMPARE) {
+    el.textContent = ` · Unique Pokémon — you: ${n(stats.owned)}, ${state.compareWith}: ${n(stats.other_owned)} of ${n(stats.total)}`;
+  } else {
+    el.textContent = ` · ${n(stats.owned)} / ${n(stats.total)} unique Pokémon` +
+      (state.viewUser ? ` in ${state.viewUser}'s collection` : " in your collection");
+  }
+}
+
+// After adding/removing a card: re-ask for just the stats (page 1, one row).
+async function refreshPokemonCount() {
   try {
-    if (COMPARE) {
-      if (!state.compareWith) { el.textContent = ""; return; }
-      const [mine, theirs] = await Promise.all([summary(""), summary(state.compareWith)]);
-      el.textContent = ` · Unique Pokémon — you: ${mine.unique_pokemon.toLocaleString()}, ` +
-        `${state.compareWith}: ${theirs.unique_pokemon.toLocaleString()} of ${mine.total_pokemon.toLocaleString()}`;
-    } else {
-      const s = await summary(state.viewUser);
-      el.textContent = ` · ${s.unique_pokemon.toLocaleString()} / ${s.total_pokemon.toLocaleString()} unique Pokémon` +
-        (state.viewUser ? ` in ${state.viewUser}'s collection` : " in your collection");
-    }
-  } catch { el.textContent = ""; }
+    const res = await fetch(`/api/cards?${cardQueryParams(1, 1)}`);
+    if (res.ok) renderPokemonCount((await res.json()).pokemon);
+  } catch {}
 }
 
 async function resetAndLoad() {
-  loadPokemonCount();
+  document.getElementById("pokemon-count").textContent = "";
   state.page = 1;
   grid.innerHTML = "";
   loadedCards = [];
@@ -934,17 +935,26 @@ async function resetAndLoad() {
 
 const PAGE_SIZE = 200;
 
+function cardQueryParams(page, pageSize) {
+  const params = new URLSearchParams({
+    search: state.search, set: state.set, rarity: state.rarity,
+    supertype: state.supertype, type: state.type, language: state.language,
+    has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, user: state.viewUser, sort: state.sort, order: state.order,
+    page, page_size: pageSize,
+  });
+  if (COMPARE && state.compareWith) {
+    params.set("compare", state.compareWith);
+    params.set("diff", state.diff);
+  }
+  return params;
+}
+
 async function loadMore() {
   if (loading || state.page > pages) return;
   loading = true;
   statusLine.textContent = "Loading…";
 
-  const params = new URLSearchParams({
-    search: state.search, set: state.set, rarity: state.rarity,
-    supertype: state.supertype, type: state.type, language: state.language,
-    has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, user: state.viewUser, sort: state.sort, order: state.order,
-    page: state.page, page_size: PAGE_SIZE,
-  });
+  const params = cardQueryParams(state.page, PAGE_SIZE);
   if (COMPARE) {
     const empty = document.getElementById("compare-empty");
     empty.hidden = !!state.compareWith;
@@ -955,12 +965,11 @@ async function loadMore() {
       loading = false;
       return;
     }
-    params.set("compare", state.compareWith);
-    params.set("diff", state.diff);
   }
   const res = await fetch(`/api/cards?${params}`);
   const data = await res.json();
   pages = data.pages;
+  if (data.pokemon) renderPokemonCount(data.pokemon);
 
   resultCount.textContent = `${data.total.toLocaleString()} card${data.total === 1 ? "" : "s"}`;
   data.items.forEach(card => {

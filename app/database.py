@@ -481,6 +481,23 @@ def _attach_compare(conn: sqlite3.Connection, other_user: str, items: list[dict]
     return items
 
 
+def _pokemon_stats(conn: sqlite3.Connection, clauses: list[str], params: list,
+                   user_id: str, other_user: str = "") -> dict:
+    """Unique Pokemon (distinct national dex numbers) among the cards matching
+    the current filters: how many exist, and how many the user(s) own.
+    CAST because TCGdex has a few fractional ones (Rayquaza as 384.1)."""
+    base = ["cards.pokedex_number IS NOT NULL", *clauses]
+    sql = "SELECT COUNT(DISTINCT CAST(cards.pokedex_number AS INTEGER)) FROM cards WHERE "
+    owned = "cards.id IN (SELECT card_id FROM collection WHERE user_id = ? AND quantity > 0)"
+    stats = {
+        "total": conn.execute(sql + " AND ".join(base), params).fetchone()[0],
+        "owned": conn.execute(sql + " AND ".join([*base, owned]), [*params, user_id]).fetchone()[0],
+    }
+    if other_user:
+        stats["other_owned"] = conn.execute(sql + " AND ".join([*base, owned]), [*params, other_user]).fetchone()[0]
+    return stats
+
+
 def query_cards(
     user_id: str,
     search: str = "",
@@ -525,6 +542,10 @@ def query_cards(
         if has_variant:
             clauses.append("cards.variants LIKE ?")
             params.append(f'%"{has_variant}"%')
+
+        # Card-attribute filters only (no owned/wishlist/compare), for the
+        # unique-Pokemon stats below.
+        catalog_clauses, catalog_params = list(clauses), list(params)
 
         if owned:
             clauses.append(
@@ -588,13 +609,16 @@ def query_cards(
             params + [page_size, offset],
         ).fetchall()
 
-        return {
+        result = {
             "items": _attach_compare(conn, compare_with, _attach_owned_breakdown(conn, user_id, rows)),
             "total": total,
             "page": page,
             "page_size": page_size,
             "pages": max((total + page_size - 1) // page_size, 1),
         }
+        if page == 1:
+            result["pokemon"] = _pokemon_stats(conn, catalog_clauses, catalog_params, user_id, compare_with)
+        return result
     finally:
         conn.close()
 
@@ -694,25 +718,12 @@ def list_users() -> list[dict]:
 def collection_summary(user_id: str) -> dict:
     conn = get_connection()
     try:
-        summary = dict(conn.execute(
+        row = conn.execute(
             "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies "
             "FROM collection WHERE user_id = ?",
             (user_id,),
-        ).fetchone())
-        # Unique Pokemon = distinct national dex numbers. CAST because TCGdex
-        # has a few fractional ones (Rayquaza as 384.1).
-        summary["unique_pokemon"] = conn.execute(
-            """
-            SELECT COUNT(DISTINCT CAST(cards.pokedex_number AS INTEGER)) FROM collection
-            JOIN cards ON cards.id = collection.card_id
-            WHERE collection.user_id = ? AND collection.quantity > 0 AND cards.pokedex_number IS NOT NULL
-            """,
-            (user_id,),
-        ).fetchone()[0]
-        summary["total_pokemon"] = conn.execute(
-            "SELECT COUNT(DISTINCT CAST(pokedex_number AS INTEGER)) FROM cards WHERE pokedex_number IS NOT NULL"
-        ).fetchone()[0]
-        return summary
+        ).fetchone()
+        return dict(row)
     finally:
         conn.close()
 
