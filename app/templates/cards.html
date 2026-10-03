@@ -1112,10 +1112,12 @@ document.getElementById("sync-tcgdex-btn").addEventListener("click", async () =>
   pollSyncStatus();
 });
 
-function readOnly() { return !!state.viewUser; }
+// The compare page and other users' collections are view-only.
+function readOnly() { return COMPARE || !!state.viewUser; }
 
 function applyViewUser() {
   if (COMPARE) {
+    document.body.classList.add("read-only");
     document.getElementById("wishlist-label").textContent = "My wishlist";
     const url = new URL(location.href);
     if (state.compareWith) url.searchParams.set("with", state.compareWith); else url.searchParams.delete("with");
