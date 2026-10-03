@@ -694,12 +694,25 @@ def list_users() -> list[dict]:
 def collection_summary(user_id: str) -> dict:
     conn = get_connection()
     try:
-        row = conn.execute(
+        summary = dict(conn.execute(
             "SELECT COUNT(DISTINCT card_id) AS distinct_cards, COALESCE(SUM(quantity), 0) AS total_copies "
             "FROM collection WHERE user_id = ?",
             (user_id,),
-        ).fetchone()
-        return dict(row)
+        ).fetchone())
+        # Unique Pokemon = distinct national dex numbers. CAST because TCGdex
+        # has a few fractional ones (Rayquaza as 384.1).
+        summary["unique_pokemon"] = conn.execute(
+            """
+            SELECT COUNT(DISTINCT CAST(cards.pokedex_number AS INTEGER)) FROM collection
+            JOIN cards ON cards.id = collection.card_id
+            WHERE collection.user_id = ? AND collection.quantity > 0 AND cards.pokedex_number IS NOT NULL
+            """,
+            (user_id,),
+        ).fetchone()[0]
+        summary["total_pokemon"] = conn.execute(
+            "SELECT COUNT(DISTINCT CAST(pokedex_number AS INTEGER)) FROM cards WHERE pokedex_number IS NOT NULL"
+        ).fetchone()[0]
+        return summary
     finally:
         conn.close()
 
