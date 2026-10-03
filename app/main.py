@@ -89,7 +89,13 @@ async def root():
 
 @app.get("/cards")
 async def cards_page(request: Request):
-    return templates.TemplateResponse(request, "cards.html", {})
+    return templates.TemplateResponse(request, "cards.html", {"compare": False})
+
+
+@app.get("/compare")
+async def compare_page(request: Request):
+    # Same page as the gallery (so every filter carries over), in compare mode.
+    return templates.TemplateResponse(request, "cards.html", {"compare": True})
 
 
 @app.get("/api/cards")
@@ -107,13 +113,19 @@ def api_cards(
     order: str = "asc",
     page: int = 1,
     page_size: int = 60,
+    compare: str = Query("", max_length=150),
+    diff: str = Query("all", pattern="^(all|mine|theirs)$"),
     viewed: str = Depends(viewed_user_id),
+    me: Identity = Depends(current_user),
 ):
     # Plain `def`: FastAPI runs this in its worker threadpool instead of the
     # asyncio event loop, so a SQLite call that's briefly blocked behind the
     # background sync's writes doesn't stall every other request too.
+    # Comparing is always the signed-in user against someone else.
     return query_cards(
-        viewed,
+        me.user_id if compare else viewed,
+        compare_with=compare.strip(),
+        diff=diff,
         search=search.strip(),
         set_id=set_id,
         rarity=rarity,

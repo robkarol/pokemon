@@ -471,6 +471,16 @@ def _attach_owned_breakdown(conn: sqlite3.Connection, user_id: str, rows: list) 
     return items
 
 
+def _attach_compare(conn: sqlite3.Connection, other_user: str, items: list[dict]) -> list[dict]:
+    """Add the other user's per-variant ownership as other_owned_by_variant."""
+    if not other_user or not items:
+        return items
+    other = {i["id"]: i for i in _attach_owned_breakdown(conn, other_user, [{"id": i["id"]} for i in items])}
+    for item in items:
+        item["other_owned_by_variant"] = other[item["id"]]["owned_by_variant"]
+    return items
+
+
 def query_cards(
     user_id: str,
     search: str = "",
@@ -482,6 +492,8 @@ def query_cards(
     has_variant: str = "",
     owned: bool = False,
     wishlist: bool = False,
+    compare_with: str = "",
+    diff: str = "all",
     sort: str = "set",
     order: str = "asc",
     page: int = 1,
@@ -523,6 +535,24 @@ def query_cards(
         if wishlist:
             clauses.append("cards.id IN (SELECT card_id FROM wishlist WHERE user_id = ?)")
             params.append(user_id)
+        if compare_with:
+            # A card differs when one user owns a print variant of it that the
+            # other doesn't (quantities aside: 1 vs 3 copies isn't a difference).
+            only_in = """cards.id IN (
+                SELECT a.card_id FROM collection a
+                WHERE a.user_id = ? AND a.quantity > 0 AND NOT EXISTS (
+                    SELECT 1 FROM collection b
+                    WHERE b.user_id = ? AND b.card_id = a.card_id
+                      AND b.variant = a.variant AND b.quantity > 0))"""
+            if diff == "mine":
+                clauses.append(only_in)
+                params += [user_id, compare_with]
+            elif diff == "theirs":
+                clauses.append(only_in)
+                params += [compare_with, user_id]
+            else:
+                clauses.append(f"({only_in} OR {only_in})")
+                params += [user_id, compare_with, compare_with, user_id]
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
@@ -552,7 +582,7 @@ def query_cards(
         ).fetchall()
 
         return {
-            "items": _attach_owned_breakdown(conn, user_id, rows),
+            "items": _attach_compare(conn, compare_with, _attach_owned_breakdown(conn, user_id, rows)),
             "total": total,
             "page": page,
             "page_size": page_size,

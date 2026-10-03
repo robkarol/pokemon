@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pokemon Card Gallery</title>
+<title>{% if compare %}Compare Collections{% else %}Pokemon Card Gallery{% endif %}</title>
 <style>
   :root {
     color-scheme: dark;
@@ -202,6 +202,11 @@
   }
   #view-user-wrap { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
   #view-note { color: var(--accent); font-size: 0.8rem; }
+  .card .cmp { font-size: 0.72rem; margin-top: 0.3rem; line-height: 1.35; }
+  .card .cmp .mine { color: #22c55e; }
+  .card .cmp .theirs { color: #38bdf8; }
+  .card .cmp .none { color: var(--muted); }
+  #compare-empty { text-align: center; color: var(--muted); padding: 3rem 1rem; }
   /* Viewing someone else's collection: read-only, so hide every control that
      writes; owned badges and filled hearts still show what they have. */
   body.read-only .add-buttons,
@@ -391,13 +396,14 @@
 <body>
 
 <header>
-  <h1>Poke<span class="accent">mon</span> Card Gallery</h1>
+  <h1>Poke<span class="accent">mon</span> {% if compare %}Compare Collections{% else %}Card Gallery{% endif %}</h1>
+  {% if compare %}<a class="back-link" href="/cards">&larr; Gallery</a>{% else %}<a class="back-link" href="/compare">⚖ Compare collections</a>{% endif %}
   <a class="back-link" href="/binder">📁 My Binders</a>
   <span id="me-line"></span>
   <div id="sync-banner"></div>
 </header>
 
-<div class="sync-row">
+<div class="sync-row"{% if compare %} style="display: none"{% endif %}>
   <button id="sync-en-btn" type="button">Resync English cards</button>
   <button id="sync-tcgdex-btn" type="button">Add Japanese &amp; Thai cards</button>
   <button id="sync-new-btn" type="button" title="Fetch only sets not in the database yet; existing sets are not touched">Check for new sets</button>
@@ -433,9 +439,16 @@
     <option value="desc">Descending</option>
   </select>
   <label id="view-user-wrap">
-    Collection:
-    <select id="view-user"><option value="">Mine</option></select>
+    {% if compare %}Compare with:{% else %}Collection:{% endif %}
+    <select id="view-user"><option value="">{% if compare %}Choose a user…{% else %}Mine{% endif %}</option></select>
   </label>
+  {% if compare %}
+  <select id="compare-diff">
+    <option value="all">All differences</option>
+    <option value="mine">Only I have</option>
+    <option value="theirs">Only they have</option>
+  </select>
+  {% endif %}
   <label class="owned-toggle">
     <input type="checkbox" id="filter-owned">
     <span id="owned-label">My collection</span>
@@ -449,6 +462,7 @@
 
 <p id="result-count"></p>
 <div id="grid"></div>
+{% if compare %}<div id="compare-empty" hidden></div>{% endif %}
 <div id="status-line"></div>
 <div id="sentinel"></div>
 
@@ -471,9 +485,14 @@
 </div>
 
 <script>
+const COMPARE = {{ "true" if compare else "false" }};
+
 const state = {
   search: "", set: "", rarity: "", supertype: "", type: "", language: "en", hasVariant: "", owned: false, wishlist: false,
-  viewUser: new URLSearchParams(location.search).get("user") || "",
+  viewUser: COMPARE ? "" : (new URLSearchParams(location.search).get("user") || ""),
+  // Compare mode: the other user, and which side of the difference to show.
+  compareWith: COMPARE ? (new URLSearchParams(location.search).get("with") || "") : "",
+  diff: new URLSearchParams(location.search).get("diff") || "all",
   sort: "set", order: "asc", page: 1,
 };
 let pages = 1;
@@ -594,6 +613,7 @@ function cardEl(card, index) {
       <div class="name">${card.name}</div>
       <div class="sub">${card.set_name || ""} · #${card.number || "?"}</div>
       ${card.pokedex_number != null ? `<div class="sub">Pokédex #${String(card.pokedex_number).padStart(4, "0")}</div>` : ""}
+      ${COMPARE ? compareLines(card) : ""}
     </div>
   `;
   const addButtons = el.querySelector(".add-buttons");
@@ -795,6 +815,19 @@ function safeParseList(value) {
   }
 }
 
+// "You: Normal, Reverse Holo / chris: —" — which print variants each side owns.
+function ownedVariants(byVariant) {
+  return Object.keys(byVariant || {}).filter(v => byVariant[v] > 0).sort();
+}
+
+function compareLines(card) {
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const line = (who, cls, variants) =>
+    `<div><span class="${variants.length ? cls : "none"}">${esc(who)}: ${variants.length ? variants.map(variantLabel).join(", ") : "—"}</span></div>`;
+  return `<div class="cmp">${line("You", "mine", ownedVariants(card.owned_by_variant))}` +
+    `${line(state.compareWith, "theirs", ownedVariants(card.other_owned_by_variant))}</div>`;
+}
+
 function renderLightbox(card) {
   document.getElementById("lightbox-img").src = card.image_filename ? `/images/${card.image_filename}` : "";
   document.getElementById("lightbox-img").alt = card.name || "";
@@ -803,6 +836,11 @@ function renderLightbox(card) {
     [card.set_name, card.series].filter(Boolean).join(" · ") || "";
   renderQtyStepper(card);
   paintWish(document.getElementById("lightbox-wish"), card, true);
+  if (COMPARE) {
+    const theirs = ownedVariants(card.other_owned_by_variant);
+    document.getElementById("d-set-line").textContent +=
+      ` — ${state.compareWith} has ${theirs.length ? theirs.map(variantLabel).join(", ") : "none"}`;
+  }
 
   const types = safeParseList(card.types);
   const subtypes = safeParseList(card.subtypes);
@@ -881,6 +919,19 @@ async function loadMore() {
     has_variant: state.hasVariant, owned: state.owned, wishlist: state.wishlist, user: state.viewUser, sort: state.sort, order: state.order,
     page: state.page, page_size: PAGE_SIZE,
   });
+  if (COMPARE) {
+    const empty = document.getElementById("compare-empty");
+    empty.hidden = !!state.compareWith;
+    if (!state.compareWith) {
+      if (!empty.textContent) empty.textContent = "Choose a user above to see the cards that differ between your collections.";
+      resultCount.textContent = "";
+      statusLine.textContent = "";
+      loading = false;
+      return;
+    }
+    params.set("compare", state.compareWith);
+    params.set("diff", state.diff);
+  }
   const res = await fetch(`/api/cards?${params}`);
   const data = await res.json();
   pages = data.pages;
@@ -1064,6 +1115,14 @@ document.getElementById("sync-tcgdex-btn").addEventListener("click", async () =>
 function readOnly() { return !!state.viewUser; }
 
 function applyViewUser() {
+  if (COMPARE) {
+    document.getElementById("wishlist-label").textContent = "My wishlist";
+    const url = new URL(location.href);
+    if (state.compareWith) url.searchParams.set("with", state.compareWith); else url.searchParams.delete("with");
+    if (state.diff !== "all") url.searchParams.set("diff", state.diff); else url.searchParams.delete("diff");
+    history.replaceState(null, "", url);
+    return;
+  }
   const who = state.viewUser;
   document.body.classList.toggle("read-only", !!who);
   document.getElementById("owned-label").textContent = who ? `${who}'s collection` : "My collection";
@@ -1086,19 +1145,39 @@ async function loadUsers() {
     const sel = document.getElementById("view-user");
     const others = users.filter(u => u.user_id !== me);
     // Option() rather than innerHTML: usernames are text, never markup.
-    sel.replaceChildren(new Option("Mine", ""),
+    sel.replaceChildren(new Option(COMPARE ? "Choose a user…" : "Mine", ""),
       ...others.map(u => new Option(`${u.user_id} (${u.distinct_cards} cards)`, u.user_id)));
     if (state.viewUser === me) { state.viewUser = ""; applyViewUser(); resetAndLoad(); }
     if (state.viewUser && !others.some(u => u.user_id === state.viewUser)) {
       sel.add(new Option(state.viewUser, state.viewUser));
+    }
+    if (COMPARE) {
+      if (state.compareWith && !others.some(u => u.user_id === state.compareWith)) {
+        sel.add(new Option(state.compareWith, state.compareWith));
+      }
+      sel.value = state.compareWith;
+      if (!others.length) document.getElementById("compare-empty").textContent =
+        "Nobody else has a collection yet, so there's no one to compare with.";
+      return;
     }
     sel.value = state.viewUser;
     document.getElementById("view-user-wrap").hidden = !others.length && !state.viewUser;
   } catch {}
 }
 
+if (COMPARE) {
+  const diffSel = document.getElementById("compare-diff");
+  diffSel.value = state.diff;
+  diffSel.addEventListener("change", e => {
+    state.diff = e.target.value;
+    applyViewUser();
+    resetAndLoad();
+  });
+}
+
 document.getElementById("view-user").addEventListener("change", e => {
-  state.viewUser = e.target.value;
+  if (COMPARE) state.compareWith = e.target.value;
+  else state.viewUser = e.target.value;
   applyViewUser();
   closeLightbox();
   resetAndLoad();
