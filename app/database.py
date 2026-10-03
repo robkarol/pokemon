@@ -544,7 +544,14 @@ def query_cards(
                     SELECT 1 FROM collection b
                     WHERE b.user_id = ? AND b.card_id = a.card_id
                       AND b.variant = a.variant AND b.quantity > 0))"""
-            if diff == "mine":
+            if diff == "both":
+                # The same: both own at least one identical print variant.
+                clauses.append("""cards.id IN (
+                    SELECT a.card_id FROM collection a JOIN collection b
+                      ON b.card_id = a.card_id AND b.variant = a.variant
+                    WHERE a.user_id = ? AND b.user_id = ? AND a.quantity > 0 AND b.quantity > 0)""")
+                params += [user_id, compare_with]
+            elif diff == "mine":
                 clauses.append(only_in)
                 params += [user_id, compare_with]
             elif diff == "theirs":

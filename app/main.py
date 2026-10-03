@@ -114,7 +114,7 @@ def api_cards(
     page: int = 1,
     page_size: int = 60,
     compare: str = Query("", max_length=150),
-    diff: str = Query("all", pattern="^(all|mine|theirs)$"),
+    diff: str = Query("all", pattern="^(all|mine|theirs|both)$"),
     viewed: str = Depends(viewed_user_id),
     me: Identity = Depends(current_user),
 ):
